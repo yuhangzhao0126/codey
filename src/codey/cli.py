@@ -14,9 +14,16 @@ from prompt_toolkit.completion import Completer, Completion, WordCompleter
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 
-from .agent import Agent
+from .agent import (
+    Agent,
+    AssistantTextDelta,
+    ToolCallRequested,
+    ToolResult,
+    TurnCompleted,
+)
 from .config import ConfigFile
 from .prompt import build_system_prompt
+from .tools import build_default_registry
 
 
 # ---------- command registry ----------
@@ -75,7 +82,7 @@ async def _cmd_profile(ctx: ReplContext, arg: str) -> bool:
     except RuntimeError as e:
         print(f"({e})\n")
         return True
-    ctx.agent.swap_profile(new_profile)
+    await ctx.agent.swap_profile(new_profile)
     print(f"(switched to {new_profile.name}: {new_profile.model} @ {new_profile.base_url})\n")
     return True
 
@@ -198,7 +205,25 @@ async def _handle_slash(ctx: ReplContext, line: str) -> bool:
 async def _run(profile_arg: str | None) -> None:
     cfg = ConfigFile.load()
     profile = cfg.resolve(profile_arg)
-    agent = Agent(profile=profile, system_prompt=build_system_prompt())
+
+    # Approval prompt for non-allowlisted bash commands.
+    approval_session: PromptSession[str] = PromptSession()
+
+    async def approve_bash(command: str) -> bool:
+        print(f"\n  ⚠  agent wants to run:\n     $ {command}")
+        try:
+            with patch_stdout():
+                ans = (await approval_session.prompt_async("  allow? [y/N] ")).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return ans in ("y", "yes")
+
+    tools = build_default_registry(approve=approve_bash)
+    agent = Agent(
+        profile=profile,
+        system_prompt=build_system_prompt(),
+        tools=tools,
+    )
     commands = _build_commands()
     ctx = ReplContext(cfg=cfg, agent=agent, commands=commands)
 
@@ -210,30 +235,44 @@ async def _run(profile_arg: str | None) -> None:
     print(f"codey — profile: {profile.name} | model: {profile.model} @ {profile.base_url}")
     print("Type /help for commands.\n")
 
-    while True:
-        try:
-            with patch_stdout():
-                user_input = (await session.prompt_async("you > ")).strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
-
-        if not user_input:
-            continue
-
-        if user_input.startswith("/"):
-            keep_going = await _handle_slash(ctx, user_input)
-            if not keep_going:
+    try:
+        while True:
+            try:
+                with patch_stdout():
+                    user_input = (await session.prompt_async("you > ")).strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
                 return
-            continue
 
-        print("codey > ", end="", flush=True)
-        try:
-            async for delta in agent.send(user_input):
-                print(delta, end="", flush=True)
-        except Exception as e:  # noqa: BLE001
-            print(f"\n[error] {e}", file=sys.stderr)
-        print("\n")
+            if not user_input:
+                continue
+
+            if user_input.startswith("/"):
+                keep_going = await _handle_slash(ctx, user_input)
+                if not keep_going:
+                    return
+                continue
+
+            print("codey > ", end="", flush=True)
+            try:
+                async for event in agent.run(user_input):
+                    if isinstance(event, AssistantTextDelta):
+                        print(event.text, end="", flush=True)
+                    elif isinstance(event, ToolCallRequested):
+                        print(f"\n  → tool {event.name}({event.arguments})", flush=True)
+                    elif isinstance(event, ToolResult):
+                        tag = "ok" if event.ok else "err"
+                        print(f"  ← {event.name} [{tag}] {event.content}", flush=True)
+                    elif isinstance(event, TurnCompleted):
+                        if event.reason == "error":
+                            print(f"\n[error] {event.error}", file=sys.stderr)
+                        elif event.reason == "cancelled":
+                            print("\n[cancelled]", file=sys.stderr)
+            except KeyboardInterrupt:
+                print("\n[interrupted]", file=sys.stderr)
+            print("\n")
+    finally:
+        await agent.aclose()
 
 
 def main() -> None:
