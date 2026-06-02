@@ -281,8 +281,17 @@ def main() -> None:
         "--profile", "-p",
         help="profile name from ~/.config/codey/config.toml (overrides $CODEY_PROFILE)",
     )
+    parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="launch the Textual full-screen UI instead of the line REPL",
+    )
     args = parser.parse_args()
-    asyncio.run(_run(args.profile))
+    if args.tui:
+        from .tui import run as run_tui  # import lazily so the REPL stays light
+        run_tui(args.profile)
+    else:
+        asyncio.run(_run(args.profile))
 
 
 if __name__ == "__main__":
