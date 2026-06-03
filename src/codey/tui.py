@@ -50,8 +50,9 @@ from .agent import (
     TurnStarted,
 )
 from .config import ConfigFile, Profile
+from .permissions import Mode, PermissionEngine, Rule
 from .prompt import build_system_prompt
-from .tools import build_default_registry
+from .tools import Verdict, build_default_registry
 
 
 # ---------- slash command registry ----------
@@ -66,43 +67,101 @@ class SlashCommand:
 
 # ---------- approval modal ----------
 
-class ApprovalScreen(ModalScreen[bool]):
-    """Tiny y/N modal. Returns True if the user approves."""
+class ApprovalScreen(ModalScreen[str]):
+    """4-option modal: returns 'y' (allow once), 'a' (always allow),
+    'n' (deny once), 'd' (always deny), or 'cancel' (esc)."""
 
     BINDINGS = [
-        Binding("y", "approve", "yes"),
-        Binding("n", "deny", "no"),
-        Binding("escape", "deny", "no"),
+        Binding("y", "answer('y')", "allow once"),
+        Binding("a", "answer('a')", "always allow"),
+        Binding("n", "answer('n')", "deny once"),
+        Binding("d", "answer('d')", "always deny"),
+        Binding("escape", "answer('cancel')", "cancel"),
     ]
 
     DEFAULT_CSS = """
     ApprovalScreen { align: center middle; }
     #approval-box {
-        width: 80; max-width: 90%;
+        width: 90; max-width: 95%;
         padding: 1 2;
         background: $panel;
         border: round $warning;
     }
-    #approval-title { color: $warning; padding-bottom: 1; }
-    #approval-cmd   { color: $text;    padding-bottom: 1; }
-    #approval-help  { color: $text-muted; }
+    #approval-title  { color: $warning; padding-bottom: 1; }
+    #approval-cmd    { color: $text;    padding-bottom: 1; }
+    #approval-reason { color: $text-muted; padding-bottom: 1; }
+    #approval-help   { color: $text-muted; }
     """
 
-    def __init__(self, command: str) -> None:
+    def __init__(self, *, tool: str, command: str, reason: str = "") -> None:
         super().__init__()
+        self.tool = tool
         self.command = command
+        self.reason = reason
 
     def compose(self) -> ComposeResult:
         with Vertical(id="approval-box"):
-            yield Static("⚠  agent wants to run a shell command", id="approval-title")
+            yield Static(f"⚠  agent wants to use tool [b]{self.tool}[/]", id="approval-title")
             yield Static(f"$ {self.command}", id="approval-cmd")
-            yield Static("press [b]y[/] to allow · [b]n[/] / [b]esc[/] to deny", id="approval-help")
+            if self.reason:
+                yield Static(f"reason: {self.reason}", id="approval-reason")
+            yield Static(
+                "[b]y[/] allow once   [b]a[/] always allow\n"
+                "[b]n[/] deny once    [b]d[/] always deny     [b]esc[/] cancel turn",
+                id="approval-help",
+            )
 
-    def action_approve(self) -> None:
-        self.dismiss(True)
+    def action_answer(self, ans: str) -> None:
+        self.dismiss(ans)
 
-    def action_deny(self) -> None:
-        self.dismiss(False)
+
+class RememberScreen(ModalScreen[tuple[str, str] | None]):
+    """Asks the user for a pattern and a scope (project/user) before saving
+    an allow/deny rule. Returns (pattern, scope) or None on cancel."""
+
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    DEFAULT_CSS = """
+    RememberScreen { align: center middle; }
+    #remember-box {
+        width: 90; max-width: 95%;
+        padding: 1 2;
+        background: $panel;
+        border: round $primary;
+    }
+    #remember-title  { color: $primary; padding-bottom: 1; }
+    #remember-help   { color: $text-muted; padding-top: 1; }
+    Input { background: $background; border: round $primary 50%; }
+    """
+
+    def __init__(self, action: str, suggested_pattern: str) -> None:
+        super().__init__()
+        self.action = action
+        self.suggested = suggested_pattern
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="remember-box"):
+            yield Static(f"save '{self.action}' rule", id="remember-title")
+            yield Static("pattern (glob, * matches anything):")
+            yield Input(value=self.suggested, id="remember-pattern")
+            yield Static("scope: type 'project' or 'user' (default project)")
+            yield Input(value="project", id="remember-scope")
+            yield Static("enter twice to save · esc to cancel", id="remember-help")
+
+    def on_mount(self) -> None:
+        self.query_one("#remember-pattern", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "remember-pattern":
+            self.query_one("#remember-scope", Input).focus()
+            return
+        pattern = self.query_one("#remember-pattern", Input).value.strip() or self.suggested
+        scope = self.query_one("#remember-scope", Input).value.strip().lower() or "project"
+        scope = "user" if scope.startswith("u") else "project"
+        self.dismiss((pattern, scope))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 # ---------- profile picker modal ----------
@@ -231,6 +290,7 @@ class CodeyApp(App[None]):
         super().__init__()
         self.profile_arg = profile_arg
         self.cfg = ConfigFile.load()
+        self.engine: PermissionEngine = PermissionEngine.load()
         self.agent: Agent  # set in on_mount
         self._busy = False
         self._turn_worker: Worker | None = None  # current in-flight model turn
@@ -252,39 +312,67 @@ class CodeyApp(App[None]):
         self.agent = Agent(
             profile=profile,
             system_prompt=build_system_prompt(),
-            tools=build_default_registry(approve=self._approve_bash),
+            tools=build_default_registry(engine=self.engine, approve=self._approve_tool),
         )
         self._refresh_title()
         self._log_meta("codey ready · type / for commands · ctrl+c to quit")
+        self._log_meta(f"permission mode: {self.engine.mode.value}"
+                       + ("  ⚠" if self.engine.mode == Mode.YOLO else ""))
         self.query_one(Input).focus()
 
     async def on_unmount(self) -> None:
         if hasattr(self, "agent"):
             await self.agent.aclose()
 
-    # -- approval hook handed to BashTool --
+    # -- approval hook handed to all permission-gated tools --
 
-    async def _approve_bash(self, command: str) -> bool:
+    async def _approve_tool(self, ctx_dict: dict) -> Verdict:
         # The agent loop already runs inside a worker (see on_input_submitted),
         # so push_screen_wait is safe here.
-        return bool(await self.push_screen_wait(ApprovalScreen(command)))
+        ans = await self.push_screen_wait(ApprovalScreen(
+            tool=ctx_dict["tool"],
+            command=ctx_dict["command"],
+            reason=ctx_dict.get("reason", ""),
+        ))
+        if ans in (None, "cancel", "n"):
+            return Verdict(allowed=False)
+        if ans == "y":
+            return Verdict(allowed=True)
+        # 'a' or 'd' — ask for pattern + scope before persisting.
+        action = "allow" if ans == "a" else "deny"
+        suggested = ctx_dict.get("suggested_pattern") or "*"
+        result = await self.push_screen_wait(RememberScreen(action, suggested))
+        if not result:
+            # User backed out of the remember step; fall back to one-shot.
+            return Verdict(allowed=(action == "allow"))
+        pattern, scope = result
+        self._log_meta(f"(rule added: {action} {ctx_dict['tool']}:{pattern} → {scope})")
+        return Verdict(
+            allowed=(action == "allow"),
+            remember=True,
+            remember_action=action,
+            remember_pattern=pattern,
+            remember_scope=scope,
+        )
 
     # -- slash command registry --
 
     def _build_slash_commands(self) -> dict[str, SlashCommand]:
         cmds = [
-            SlashCommand("exit",     "quit codey",
+            SlashCommand("exit",       "quit codey",
                          lambda app, _: app._cmd_exit()),
-            SlashCommand("help",     "show this help",
+            SlashCommand("help",       "show this help",
                          lambda app, _: app._cmd_help()),
-            SlashCommand("reset",    "clear chat history (keeps system prompt)",
+            SlashCommand("reset",      "clear chat history (keeps system prompt)",
                          lambda app, _: app._cmd_reset()),
-            SlashCommand("model",    "show the active model / profile / base_url",
+            SlashCommand("model",      "show the active model / profile / base_url",
                          lambda app, _: app._cmd_model()),
-            SlashCommand("profiles", "list available profiles",
+            SlashCommand("profiles",   "list available profiles",
                          lambda app, _: app._cmd_profiles_list()),
-            SlashCommand("profile",  "switch profile: /profile [name]",
+            SlashCommand("profile",    "switch profile: /profile [name]",
                          lambda app, arg: app._cmd_profile_switch(arg)),
+            SlashCommand("permission", "permission mode + rules: /permission [mode <name>|list]",
+                         lambda app, arg: app._cmd_permission(arg)),
         ]
         return {c.name: c for c in cmds}
 
@@ -298,6 +386,47 @@ class CodeyApp(App[None]):
         self._log_meta(f"profile : {p.name}")
         self._log_meta(f"model   : {p.model}")
         self._log_meta(f"base_url: {p.base_url}")
+
+    async def _cmd_permission(self, arg: str) -> None:
+        arg = arg.strip()
+        eng = self.engine
+        if not arg:
+            self._log_meta(f"mode    : {eng.mode.value}")
+            self._log_meta(f"user    : {len(eng.user_rules)} rule(s)")
+            self._log_meta(f"project : {len(eng.project_rules)} rule(s)")
+            self._log_meta("subcommands: mode <safe|paranoid|read-only|yolo>, list")
+            return
+        sub, _, rest = arg.partition(" ")
+        sub = sub.lower()
+        if sub == "mode":
+            name = rest.strip().lower()
+            try:
+                new_mode = Mode(name)
+            except ValueError:
+                self._log_error(
+                    f"unknown mode: {name!r}; choose: "
+                    + ", ".join(m.value for m in Mode)
+                )
+                return
+            eng.save_mode(new_mode)
+            self._refresh_title()
+            warn = "  ⚠" if new_mode == Mode.YOLO else ""
+            self._log_meta(f"(permission mode → {new_mode.value}{warn})")
+            return
+        if sub == "list":
+            if not eng.user_rules and not eng.project_rules:
+                self._log_meta("(no user or project rules)")
+                return
+            for label, rules in (("project", eng.project_rules), ("user", eng.user_rules)):
+                if rules:
+                    self._log_meta(f"[{label}]")
+                    for i, r in enumerate(rules):
+                        reason = f"  ({r.reason})" if r.reason else ""
+                        self._log_meta(
+                            f"  {i:>2}  {r.action:<5} {r.tool:<10} {r.pattern}{reason}"
+                        )
+            return
+        self._log_error(f"unknown subcommand: /permission {sub}")
 
     async def _cmd_help(self) -> None:
         width = max(len(c.name) for c in self.slash_commands.values())
@@ -352,7 +481,8 @@ class CodeyApp(App[None]):
     def _refresh_title(self) -> None:
         p = self.agent.profile
         self.title = "codey"
-        self.sub_title = f"{p.name} · {p.model} · {p.base_url}"
+        mode_str = self.engine.mode.value.upper()
+        self.sub_title = f"{p.name} · {p.model} · mode: {mode_str}"
 
     def _log_meta(self, text: str) -> None:
         self.transcript.write(f"[dim]{text}[/]")

@@ -165,15 +165,17 @@ async def test_write_file_approval_denied(tmp_path: Path):
 async def test_write_file_approval_allowed(tmp_path: Path):
     target = tmp_path / "f.txt"
     calls = []
-    def approve(cmd):
-        calls.append(cmd)
+    def approve(ctx):
+        calls.append(ctx)
         return True
     tool = WriteFileTool(approve=approve)
     out = await tool.run({"path": str(target), "content": "yep"})
     assert out.startswith("ok:")
     assert target.read_text() == "yep"
     assert len(calls) == 1
-    assert str(target) in calls[0]
+    # The new ctx-dict shape includes the path in the 'command' summary string.
+    assert str(target) in calls[0]["command"]
+    assert calls[0]["tool"] == "write_file"
 
 
 # ---------- apply_edit ----------

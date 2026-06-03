@@ -55,7 +55,8 @@ async def test_help_lists_all_commands():
     async with app.run_test() as pilot:
         await _submit(pilot, "/help")
         text = _transcript_text(app)
-        for cmd in ("/exit", "/help", "/reset", "/model", "/profile", "/profiles"):
+        for cmd in ("/exit", "/help", "/reset", "/model",
+                    "/profile", "/profiles", "/permission"):
             assert cmd in text, f"{cmd} missing from /help output: {text!r}"
 
 
@@ -344,3 +345,36 @@ async def test_escape_cancels_in_flight_turn(monkeypatch):
             await pilot.pause()
         assert app._busy is False
         assert slow.cancelled is True
+
+
+# ---------- permission slash command + mode in header ----------
+
+async def test_permission_status_shows_mode_and_counts():
+    app = CodeyApp(profile_arg=None)
+    async with app.run_test() as pilot:
+        await _submit(pilot, "/permission")
+        text = _transcript_text(app)
+        assert "mode" in text.lower()
+        assert "safe" in text.lower()
+
+
+async def test_permission_mode_switch_updates_header(tmp_path, monkeypatch):
+    # Point the user-permissions file at tmp so save_mode doesn't touch real config.
+    import codey.permissions as perms
+    monkeypatch.setattr(perms, "USER_PERMISSIONS_PATH", tmp_path / "permissions.toml")
+    monkeypatch.setattr(perms, "PROJECT_PERMISSIONS_PATH", tmp_path / "_project.toml")
+    app = CodeyApp(profile_arg=None)
+    async with app.run_test() as pilot:
+        await _submit(pilot, "/permission mode read-only")
+        await pilot.pause()
+        from codey.permissions import Mode
+        assert app.engine.mode == Mode.READ_ONLY
+        assert "READ-ONLY" in app.sub_title or "read-only" in app.sub_title.lower()
+
+
+async def test_permission_unknown_subcommand_reports_error():
+    app = CodeyApp(profile_arg=None)
+    async with app.run_test() as pilot:
+        await _submit(pilot, "/permission frobnicate")
+        text = _transcript_text(app).lower()
+        assert "unknown subcommand" in text

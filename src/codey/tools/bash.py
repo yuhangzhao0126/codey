@@ -1,13 +1,8 @@
 """Bash tool: run shell commands on the local machine.
 
-Approval policy:
-- A small allowlist of read-only commands (ls, cat, git status, etc.) runs
-  without prompting.
-- Anything else calls the `approve(command)` hook supplied by the host.
-  If approve returns False, the tool returns an error string to the model
-  (the model can then choose to try a different command).
-- If no `approve` hook is provided, non-allowlisted commands auto-run.
-  Suitable for tests; the REPL always wires one up.
+Approval flows through a PermissionEngine. If no engine is provided, the
+tool falls back to a permissive in-memory engine (used by tests and the
+no-config bootstrap path).
 
 Execution is via /bin/bash -c with a 60s timeout. stdout+stderr are merged
 and capped at 10_000 chars so we don't blow the context window.
@@ -16,53 +11,34 @@ and capped at 10_000 chars so we don't blow the context window.
 from __future__ import annotations
 
 import asyncio
-import shlex
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-ApproveFn = Callable[[str], "bool | Awaitable[bool]"]
+from ..permissions import Allow, Ask, Deny, PermissionEngine, Rule, suggest_pattern
 
-# First token of each command line. Conservative — everything else asks.
-READONLY_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        "ls", "pwd", "cat", "head", "tail", "wc", "file", "stat",
-        "tree", "find", "echo", "which", "whoami", "date", "uname",
-        "env", "printenv", "df", "du", "ps", "uptime",
-    }
-)
+# An approve callback receives the prompt context and returns a Verdict.
+# See cli.py / tui.py for actual implementations. None means "auto-allow".
+ApproveCtx = dict[str, Any]   # {tool, command, reason, suggested_pattern}
+ApproveFn = Callable[[ApproveCtx], "Verdict | Awaitable[Verdict]"]
 
-# git subcommands that don't mutate state.
-READONLY_GIT_SUBS: frozenset[str] = frozenset(
-    {"status", "log", "diff", "show", "blame", "branch", "remote", "config"}
-)
+
+@dataclass(frozen=True)
+class Verdict:
+    allowed: bool
+    # When 'remember' is set, the host should append a rule to the engine.
+    remember: bool = False
+    remember_action: str = "allow"        # "allow" | "deny"
+    remember_pattern: str = ""
+    remember_scope: str = "project"       # "project" | "user"
+
 
 MAX_OUTPUT_CHARS = 10_000
 DEFAULT_TIMEOUT_SECONDS = 60
 
 
-def _is_readonly(command: str) -> bool:
-    """Best-effort: split on the first pipe/and/semicolon, look at the first
-    token of the first segment. Anything fancy => not readonly => prompt."""
-    if any(op in command for op in ("|", ";", "&&", "||", ">", "<", "`", "$(")):
-        return False
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return False
-    if not tokens:
-        return False
-    cmd = tokens[0]
-    if cmd in READONLY_ALLOWLIST:
-        return True
-    if cmd == "git" and len(tokens) >= 2 and tokens[1] in READONLY_GIT_SUBS:
-        return True
-    return False
-
-
 @dataclass
 class BashTool:
-    """Implements the `Tool` Protocol from codey.agent."""
-
+    engine: PermissionEngine = None  # type: ignore[assignment]
     approve: ApproveFn | None = None
     timeout: int = DEFAULT_TIMEOUT_SECONDS
 
@@ -70,13 +46,16 @@ class BashTool:
     description: str = (
         "Execute a shell command on the user's local machine via /bin/bash. "
         "Returns merged stdout+stderr and the exit code. "
-        "Read-only commands run immediately; anything else requires user approval, "
-        "which the user may deny. Commands time out after 60 seconds. Use this for "
-        "inspecting files, running tests, running git, etc."
+        "Permission depends on the active permission rules and mode; some "
+        "commands run immediately, some require user approval, some are denied. "
+        "Use this for inspecting files, running tests, running git, etc. "
+        "Commands time out after 60 seconds."
     )
     parameters: dict[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
+        if self.engine is None:
+            self.engine = PermissionEngine()  # permissive default
         self.parameters = {
             "type": "object",
             "properties": {
@@ -94,10 +73,29 @@ class BashTool:
         if not command:
             return "error: empty command"
 
-        if not _is_readonly(command):
-            allowed = await self._ask(command)
-            if not allowed:
+        decision = self.engine.check("bash", command)
+        if isinstance(decision, Deny):
+            return f"error: blocked by permission rule: {decision.reason}"
+        if isinstance(decision, Ask):
+            verdict = await self._ask({
+                "tool": "bash",
+                "command": command,
+                "reason": decision.reason,
+                "suggested_pattern": suggest_pattern("bash", command),
+            })
+            if not verdict.allowed:
                 return f"error: user denied permission to run: {command}"
+            if verdict.remember and verdict.remember_pattern:
+                rule = Rule(
+                    tool="bash",
+                    pattern=verdict.remember_pattern,
+                    action=verdict.remember_action,  # type: ignore[arg-type]
+                    reason="user-added via approval prompt",
+                )
+                if verdict.remember_scope == "user":
+                    self.engine.append_user_rule(rule)
+                else:
+                    self.engine.append_project_rule(rule)
 
         try:
             proc = await asyncio.create_subprocess_shell(
@@ -123,10 +121,10 @@ class BashTool:
 
         return f"exit={proc.returncode}\n{out}"
 
-    async def _ask(self, command: str) -> bool:
+    async def _ask(self, ctx: ApproveCtx) -> Verdict:
         if self.approve is None:
-            return True
-        result = self.approve(command)
+            return Verdict(allowed=True)
+        result = self.approve(ctx)
         if asyncio.iscoroutine(result):
             result = await result
-        return bool(result)
+        return result if isinstance(result, Verdict) else Verdict(allowed=bool(result))

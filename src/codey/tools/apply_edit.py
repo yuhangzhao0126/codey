@@ -1,4 +1,4 @@
-"""apply_edit: aider-style search/replace block editing.
+"""apply_edit: aider-style search/replace block editing. Permission-gated.
 
 Edit format (one or more blocks per request):
 
@@ -22,9 +22,10 @@ import asyncio
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
-ApproveFn = Callable[[str], "bool | Awaitable[bool]"]
+from ..permissions import Allow, Ask, Deny, PermissionEngine, Rule, suggest_pattern
+from .bash import ApproveFn, Verdict
 
 _BLOCK_RE = re.compile(
     r"<{7} SEARCH\r?\n(.*?)\r?\n={7}\r?\n(.*?)\r?\n>{7} REPLACE",
@@ -34,6 +35,7 @@ _BLOCK_RE = re.compile(
 
 @dataclass
 class ApplyEditTool:
+    engine: PermissionEngine = None  # type: ignore[assignment]
     approve: ApproveFn | None = None
 
     name: str = "apply_edit"
@@ -49,11 +51,13 @@ class ApplyEditTool:
         "make multiple edits in one call. The SEARCH side must match the file "
         "verbatim (including indentation) and appear EXACTLY ONCE; otherwise the "
         "whole operation aborts and the file is unchanged. Empty SEARCH creates "
-        "a new file with the REPLACE content. Requires user approval."
+        "a new file with the REPLACE content. Subject to permission rules."
     )
     parameters: dict[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
+        if self.engine is None:
+            self.engine = PermissionEngine()
         self.parameters = {
             "type": "object",
             "properties": {
@@ -92,9 +96,8 @@ class ApplyEditTool:
             new_content = blocks[0][1]
             if path.exists():
                 return f"error: file exists; cannot create with empty SEARCH: {path}"
-            action = f"create {path} ({len(new_content)} chars)"
-            if not await self._ask(action):
-                return f"error: user denied permission to {action}"
+            if (denial := await self._gate(path_str, f"create {path} ({len(new_content)} chars)")):
+                return denial
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(new_content, encoding="utf-8")
@@ -131,9 +134,9 @@ class ApplyEditTool:
         if working == current:
             return "error: edits produced no change"
 
-        action = f"edit {path} ({len(blocks)} block{'s' if len(blocks) != 1 else ''})"
-        if not await self._ask(action):
-            return f"error: user denied permission to {action}"
+        action_desc = f"edit {path} ({len(blocks)} block{'s' if len(blocks) != 1 else ''})"
+        if (denial := await self._gate(path_str, action_desc)):
+            return denial
 
         try:
             path.write_text(working, encoding="utf-8")
@@ -142,10 +145,37 @@ class ApplyEditTool:
 
         return f"ok: applied {len(blocks)} edit(s) to {path}"
 
-    async def _ask(self, command: str) -> bool:
+    async def _gate(self, path_str: str, summary: str) -> str | None:
+        """Consult the engine. Return an error string if denied, else None."""
+        decision = self.engine.check("apply_edit", path_str)
+        if isinstance(decision, Deny):
+            return f"error: blocked by permission rule: {decision.reason}"
+        if isinstance(decision, Ask):
+            verdict = await self._ask({
+                "tool": "apply_edit",
+                "command": summary,
+                "reason": decision.reason,
+                "suggested_pattern": suggest_pattern("apply_edit", path_str),
+            })
+            if not verdict.allowed:
+                return f"error: user denied permission to {summary}"
+            if verdict.remember and verdict.remember_pattern:
+                rule = Rule(
+                    tool="apply_edit",
+                    pattern=verdict.remember_pattern,
+                    action=verdict.remember_action,  # type: ignore[arg-type]
+                    reason="user-added via approval prompt",
+                )
+                if verdict.remember_scope == "user":
+                    self.engine.append_user_rule(rule)
+                else:
+                    self.engine.append_project_rule(rule)
+        return None
+
+    async def _ask(self, ctx: dict[str, Any]) -> Verdict:
         if self.approve is None:
-            return True
-        result = self.approve(command)
+            return Verdict(allowed=True)
+        result = self.approve(ctx)
         if asyncio.iscoroutine(result):
             result = await result
-        return bool(result)
+        return result if isinstance(result, Verdict) else Verdict(allowed=bool(result))

@@ -1,32 +1,36 @@
-"""write_file: write text to a file (creating parents). Requires approval."""
+"""write_file: write text to a file (creating parents). Permission-gated."""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
-ApproveFn = Callable[[str], "bool | Awaitable[bool]"]
+from ..permissions import Allow, Ask, Deny, PermissionEngine, Rule, suggest_pattern
+from .bash import ApproveFn, Verdict
 
 MAX_CONTENT_BYTES = 1_000_000
 
 
 @dataclass
 class WriteFileTool:
+    engine: PermissionEngine = None  # type: ignore[assignment]
     approve: ApproveFn | None = None
 
     name: str = "write_file"
     description: str = (
         "Write UTF-8 text content to a file, OVERWRITING it if it exists. "
-        "Parent directories are created as needed. Requires user approval "
-        "before each write — the user may deny. Use this to create new files "
-        "or rewrite small files from scratch; for edits to existing files prefer "
-        "apply_edit so you don't accidentally clobber unrelated content."
+        "Parent directories are created as needed. Subject to the active "
+        "permission rules; typically requires user approval. Use this to "
+        "create new files or rewrite small files from scratch; for edits to "
+        "existing files prefer apply_edit so you don't clobber unrelated content."
     )
     parameters: dict[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
+        if self.engine is None:
+            self.engine = PermissionEngine()
         self.parameters = {
             "type": "object",
             "properties": {
@@ -53,11 +57,31 @@ class WriteFileTool:
         if len(content.encode("utf-8")) > MAX_CONTENT_BYTES:
             return f"error: content exceeds {MAX_CONTENT_BYTES} bytes"
 
-        path = Path(path_str).expanduser()
-        action = f"write {len(content)} chars to {path}"
-        if not await self._ask(action):
-            return f"error: user denied permission to {action}"
+        decision = self.engine.check("write_file", path_str)
+        if isinstance(decision, Deny):
+            return f"error: blocked by permission rule: {decision.reason}"
+        if isinstance(decision, Ask):
+            verdict = await self._ask({
+                "tool": "write_file",
+                "command": f"write {len(content)} chars to {path_str}",
+                "reason": decision.reason,
+                "suggested_pattern": suggest_pattern("write_file", path_str),
+            })
+            if not verdict.allowed:
+                return f"error: user denied permission to write to {path_str}"
+            if verdict.remember and verdict.remember_pattern:
+                rule = Rule(
+                    tool="write_file",
+                    pattern=verdict.remember_pattern,
+                    action=verdict.remember_action,  # type: ignore[arg-type]
+                    reason="user-added via approval prompt",
+                )
+                if verdict.remember_scope == "user":
+                    self.engine.append_user_rule(rule)
+                else:
+                    self.engine.append_project_rule(rule)
 
+        path = Path(path_str).expanduser()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
@@ -70,10 +94,10 @@ class WriteFileTool:
 
         return f"ok: wrote {len(content)} chars to {path}"
 
-    async def _ask(self, command: str) -> bool:
+    async def _ask(self, ctx: dict[str, Any]) -> Verdict:
         if self.approve is None:
-            return True
-        result = self.approve(command)
+            return Verdict(allowed=True)
+        result = self.approve(ctx)
         if asyncio.iscoroutine(result):
             result = await result
-        return bool(result)
+        return result if isinstance(result, Verdict) else Verdict(allowed=bool(result))

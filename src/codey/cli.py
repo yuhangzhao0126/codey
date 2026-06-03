@@ -22,8 +22,9 @@ from .agent import (
     TurnCompleted,
 )
 from .config import ConfigFile
+from .permissions import Mode, PermissionEngine, Rule
 from .prompt import build_system_prompt
-from .tools import build_default_registry
+from .tools import Verdict, build_default_registry
 
 
 # ---------- command registry ----------
@@ -40,6 +41,7 @@ class Command:
 class ReplContext:
     cfg: ConfigFile
     agent: Agent
+    engine: PermissionEngine
     commands: dict[str, Command]
 
 
@@ -95,12 +97,52 @@ async def _cmd_profile(ctx: ReplContext, arg: str) -> bool:
     return True
 
 
-async def _pick_profile(ctx: ReplContext) -> str | None:
-    """Inline arrow-key picker using a prompt_toolkit completion menu.
-
-    Opens a prompt with the completion menu forced open so ↑/↓ navigate
-    immediately. Enter accepts the highlighted item.
+async def _cmd_permission(ctx: ReplContext, arg: str) -> bool:
+    """Subcommands:
+        /permission                 - show current mode + rule counts
+        /permission mode <name>     - switch mode (persists for user)
+        /permission list            - list user + project rules
     """
+    arg = arg.strip()
+    eng = ctx.engine
+    if not arg:
+        print(f"mode    : {eng.mode.value}")
+        print(f"user    : {len(eng.user_rules)} rule(s)")
+        print(f"project : {len(eng.project_rules)} rule(s)")
+        print("subcommands: mode <safe|paranoid|read-only|yolo>, list\n")
+        return True
+    sub, _, rest = arg.partition(" ")
+    sub = sub.lower()
+    if sub == "mode":
+        name = rest.strip().lower()
+        try:
+            new_mode = Mode(name)
+        except ValueError:
+            print(f"(unknown mode: {name!r}; choose: "
+                  + ", ".join(m.value for m in Mode) + ")\n")
+            return True
+        eng.save_mode(new_mode)
+        warn = " ⚠" if new_mode == Mode.YOLO else ""
+        print(f"(permission mode -> {new_mode.value}{warn})\n")
+        return True
+    if sub == "list":
+        if not eng.user_rules and not eng.project_rules:
+            print("(no user or project rules)\n")
+            return True
+        for label, rules in (("project", eng.project_rules), ("user", eng.user_rules)):
+            if rules:
+                print(f"[{label}]")
+                for i, r in enumerate(rules):
+                    reason = f"  ({r.reason})" if r.reason else ""
+                    print(f"  {i:>2}  {r.action:<5} {r.tool:<10} {r.pattern}{reason}")
+        print()
+        return True
+    print(f"(unknown subcommand: /permission {sub}; try /permission)\n")
+    return True
+
+
+async def _pick_profile(ctx: ReplContext) -> str | None:
+    """Inline arrow-key picker using a prompt_toolkit completion menu."""
     names = sorted(ctx.cfg.profiles)
     active = ctx.agent.profile.name
 
@@ -118,7 +160,6 @@ async def _pick_profile(ctx: ReplContext) -> str | None:
     def _cancel(event):
         event.app.exit(result=None)
 
-    # Pop the menu open as soon as the prompt appears.
     def _pre_run() -> None:
         get_app().current_buffer.start_completion(select_first=True)
 
@@ -141,12 +182,13 @@ async def _pick_profile(ctx: ReplContext) -> str | None:
 
 def _build_commands() -> dict[str, Command]:
     cmds = [
-        Command("exit",     "quit codey",                                  _cmd_exit),
-        Command("help",     "show this help",                              _cmd_help),
-        Command("reset",    "clear chat history (keeps system prompt)",    _cmd_reset),
-        Command("model",    "show the active model / profile / base_url",  _cmd_model),
-        Command("profiles", "list available profiles",                     _cmd_profiles),
-        Command("profile",  "switch profile: /profile [name]",             _cmd_profile),
+        Command("exit",       "quit codey",                                  _cmd_exit),
+        Command("help",       "show this help",                              _cmd_help),
+        Command("reset",      "clear chat history (keeps system prompt)",    _cmd_reset),
+        Command("model",      "show the active model / profile / base_url",  _cmd_model),
+        Command("profiles",   "list available profiles",                     _cmd_profiles),
+        Command("profile",    "switch profile: /profile [name]",             _cmd_profile),
+        Command("permission", "permission mode + rules; /permission help",   _cmd_permission),
     ]
     return {c.name: c for c in cmds}
 
@@ -154,12 +196,6 @@ def _build_commands() -> dict[str, Command]:
 # ---------- searchable substring completer ----------
 
 class SlashCompleter(Completer):
-    """Show a dropdown of slash commands whose name contains the typed substring.
-
-    Only triggers when the input begins with `/` and the user is typing the
-    command word (no space yet). Once they type a space (args), we stop completing.
-    """
-
     def __init__(self, commands: dict[str, Command]):
         self.commands = commands
 
@@ -168,14 +204,13 @@ class SlashCompleter(Completer):
         if not text.startswith("/"):
             return
         if " " in text:
-            return  # past the command name; user is typing args
-
-        query = text[1:].lower()  # strip leading '/'
+            return
+        query = text[1:].lower()
         for name, cmd in sorted(self.commands.items()):
             if query in name.lower():
                 yield Completion(
                     text=f"/{name}",
-                    start_position=-len(text),  # replace the whole `/xyz`
+                    start_position=-len(text),
                     display=f"/{name}",
                     display_meta=cmd.help,
                 )
@@ -184,9 +219,8 @@ class SlashCompleter(Completer):
 # ---------- dispatch ----------
 
 def _resolve_command(commands: dict[str, Command], typed: str) -> Command | list[str] | None:
-    """Return the matched Command, or a list of candidate names if ambiguous, or None."""
     if typed in commands:
-        return commands[typed]  # exact match wins even if it's a substring of others
+        return commands[typed]
     matches = [name for name in commands if typed.lower() in name.lower()]
     if len(matches) == 1:
         return commands[matches[0]]
@@ -196,10 +230,9 @@ def _resolve_command(commands: dict[str, Command], typed: str) -> Command | list
 
 
 async def _handle_slash(ctx: ReplContext, line: str) -> bool:
-    body = line[1:]  # strip '/'
+    body = line[1:]
     name, _, arg = body.partition(" ")
     resolved = _resolve_command(ctx.commands, name)
-
     if resolved is None:
         print(f"(unknown command: /{name} — try /help)\n")
         return True
@@ -209,32 +242,79 @@ async def _handle_slash(ctx: ReplContext, line: str) -> bool:
     return await resolved.handler(ctx, arg)
 
 
+# ---------- approval prompt (4 options + remember + scope) ----------
+
+def _make_approver(engine: PermissionEngine, session: PromptSession[str]):
+    """Build the approve callback wired into the BashTool / WriteFileTool / ApplyEditTool."""
+
+    async def approve(ctx_dict: dict) -> Verdict:
+        tool = ctx_dict["tool"]
+        command = ctx_dict["command"]
+        reason = ctx_dict.get("reason") or ""
+        suggested = ctx_dict.get("suggested_pattern") or "*"
+        print(f"\n  ⚠  agent wants to use tool [{tool}]")
+        print(f"     $ {command}")
+        if reason:
+            print(f"     reason: {reason}")
+        print("     [y] allow once   [a] always allow")
+        print("     [n] deny once    [d] always deny      [esc] cancel turn")
+        try:
+            with patch_stdout():
+                ans = (await session.prompt_async("     choice > ")).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return Verdict(allowed=False)
+
+        if ans in ("y", "yes", ""):
+            return Verdict(allowed=True)
+        if ans in ("n", "no"):
+            return Verdict(allowed=False)
+        if ans not in ("a", "d"):
+            print("     (unrecognized; denying once)")
+            return Verdict(allowed=False)
+
+        # Remember path: ask for pattern + scope.
+        action = "allow" if ans == "a" else "deny"
+        try:
+            with patch_stdout():
+                pattern = (await session.prompt_async(
+                    f"     pattern (enter to accept '{suggested}') > "
+                )).strip() or suggested
+                scope = (await session.prompt_async(
+                    "     save to [p]roject / [u]ser (default p) > "
+                )).strip().lower() or "p"
+        except (EOFError, KeyboardInterrupt):
+            return Verdict(allowed=(action == "allow"))
+        scope_name = "user" if scope.startswith("u") else "project"
+        print(f"     (rule added: {action} {tool}:{pattern} → {scope_name})")
+        return Verdict(
+            allowed=(action == "allow"),
+            remember=True,
+            remember_action=action,
+            remember_pattern=pattern,
+            remember_scope=scope_name,
+        )
+
+    return approve
+
+
 # ---------- main loop ----------
 
 async def _run(profile_arg: str | None) -> None:
     cfg = ConfigFile.load()
     profile = cfg.resolve(profile_arg)
+    engine = PermissionEngine.load()
 
-    # Approval prompt for non-allowlisted bash commands.
     approval_session: PromptSession[str] = PromptSession()
+    approver = _make_approver(engine, approval_session)
 
-    async def approve_bash(command: str) -> bool:
-        print(f"\n  ⚠  agent wants to run:\n     $ {command}")
-        try:
-            with patch_stdout():
-                ans = (await approval_session.prompt_async("  allow? [y/N] ")).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            return False
-        return ans in ("y", "yes")
-
-    tools = build_default_registry(approve=approve_bash)
+    tools = build_default_registry(engine=engine, approve=approver)
     agent = Agent(
         profile=profile,
         system_prompt=build_system_prompt(),
         tools=tools,
     )
     commands = _build_commands()
-    ctx = ReplContext(cfg=cfg, agent=agent, commands=commands)
+    ctx = ReplContext(cfg=cfg, agent=agent, engine=engine, commands=commands)
 
     session: PromptSession[str] = PromptSession(
         completer=SlashCompleter(commands),
@@ -242,6 +322,8 @@ async def _run(profile_arg: str | None) -> None:
     )
 
     print(f"codey — profile: {profile.name} | model: {profile.model} @ {profile.base_url}")
+    print(f"permission mode: {engine.mode.value}"
+          + ("  ⚠" if engine.mode == Mode.YOLO else ""))
     print("Type /help for commands.\n")
 
     try:
@@ -297,7 +379,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     if args.tui:
-        from .tui import run as run_tui  # import lazily so the REPL stays light
+        from .tui import run as run_tui
         run_tui(args.profile)
     else:
         asyncio.run(_run(args.profile))
