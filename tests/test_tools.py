@@ -1,0 +1,287 @@
+"""Tests for the file-system / search / edit tools."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from codey.tools.apply_edit import ApplyEditTool
+from codey.tools.grep import GrepTool
+from codey.tools.list_dir import ListDirTool
+from codey.tools.read_file import ReadFileTool
+from codey.tools.write_file import WriteFileTool
+
+
+# ---------- read_file ----------
+
+async def test_read_file_returns_contents(tmp_path: Path):
+    p = tmp_path / "hello.txt"
+    p.write_text("hi there\nsecond line\n", encoding="utf-8")
+    out = await ReadFileTool().run({"path": str(p)})
+    assert out == "hi there\nsecond line\n"
+
+
+async def test_read_file_missing(tmp_path: Path):
+    out = await ReadFileTool().run({"path": str(tmp_path / "nope.txt")})
+    assert out.startswith("error: file not found")
+
+
+async def test_read_file_directory(tmp_path: Path):
+    out = await ReadFileTool().run({"path": str(tmp_path)})
+    assert out.startswith("error:")
+    assert "directory" in out
+
+
+async def test_read_file_binary(tmp_path: Path):
+    p = tmp_path / "bin.dat"
+    p.write_bytes(b"\xff\xfe\x00\x01garbage")
+    out = await ReadFileTool().run({"path": str(p)})
+    assert out.startswith("error:")
+    assert "UTF-8" in out
+
+
+async def test_read_file_too_large(tmp_path: Path):
+    from codey.tools.read_file import MAX_BYTES
+    p = tmp_path / "big.txt"
+    p.write_bytes(b"x" * (MAX_BYTES + 1))
+    out = await ReadFileTool().run({"path": str(p)})
+    assert "max" in out and "bytes" in out
+
+
+# ---------- list_dir ----------
+
+async def test_list_dir_basic(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("aa")
+    (tmp_path / "b.txt").write_text("bbb")
+    (tmp_path / "sub").mkdir()
+    out = await ListDirTool().run({"path": str(tmp_path)})
+    lines = out.splitlines()
+    names = [line.split()[-1] for line in lines]
+    assert names == ["a.txt", "b.txt", "sub"]
+    # sub is dir, a.txt is file with size 2
+    assert "dir" in [line.split()[0] for line in lines]
+    assert any("a.txt" in line and "2" in line.split() for line in lines)
+
+
+async def test_list_dir_skips_hidden_by_default(tmp_path: Path):
+    (tmp_path / ".secret").write_text("x")
+    (tmp_path / "visible.txt").write_text("y")
+    out = await ListDirTool().run({"path": str(tmp_path)})
+    assert ".secret" not in out
+    assert "visible.txt" in out
+
+
+async def test_list_dir_show_hidden(tmp_path: Path):
+    (tmp_path / ".secret").write_text("x")
+    out = await ListDirTool().run({"path": str(tmp_path), "show_hidden": True})
+    assert ".secret" in out
+
+
+async def test_list_dir_not_found(tmp_path: Path):
+    out = await ListDirTool().run({"path": str(tmp_path / "nope")})
+    assert out.startswith("error: directory not found")
+
+
+async def test_list_dir_empty(tmp_path: Path):
+    out = await ListDirTool().run({"path": str(tmp_path)})
+    assert out.startswith("(empty:")
+
+
+# ---------- grep ----------
+
+async def test_grep_finds_matches(tmp_path: Path):
+    (tmp_path / "a.py").write_text("def foo():\n    return 1\n")
+    (tmp_path / "b.py").write_text("class Bar:\n    def foo(self): pass\n")
+    out = await GrepTool().run({"pattern": r"def foo", "path": str(tmp_path)})
+    assert "a.py" in out
+    assert "b.py" in out
+    assert "def foo" in out
+
+
+async def test_grep_no_matches(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("nothing here\n")
+    out = await GrepTool().run({"pattern": "zzz", "path": str(tmp_path)})
+    assert out == "(no matches)"
+
+
+async def test_grep_case_insensitive(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("Hello World\n")
+    out = await GrepTool().run({
+        "pattern": "hello", "path": str(tmp_path), "case_insensitive": True
+    })
+    assert "Hello World" in out
+
+
+async def test_grep_glob_filter(tmp_path: Path):
+    (tmp_path / "a.py").write_text("match me\n")
+    (tmp_path / "a.txt").write_text("match me\n")
+    out = await GrepTool().run({
+        "pattern": "match", "path": str(tmp_path), "glob": "*.py"
+    })
+    assert "a.py" in out
+    assert "a.txt" not in out
+
+
+async def test_grep_invalid_regex(tmp_path: Path):
+    out = await GrepTool().run({"pattern": "(", "path": str(tmp_path)})
+    assert out.startswith("error: invalid regex")
+
+
+async def test_grep_skips_skip_dirs(tmp_path: Path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "hidden.py").write_text("secret_value\n")
+    (tmp_path / "shown.py").write_text("secret_value\n")
+    out = await GrepTool().run({"pattern": "secret_value", "path": str(tmp_path)})
+    assert "shown.py" in out
+    assert ".git" not in out
+
+
+# ---------- write_file ----------
+
+async def test_write_file_creates(tmp_path: Path):
+    target = tmp_path / "sub" / "new.txt"
+    out = await WriteFileTool().run({"path": str(target), "content": "hello"})
+    assert out.startswith("ok:")
+    assert target.read_text() == "hello"
+
+
+async def test_write_file_overwrites(tmp_path: Path):
+    target = tmp_path / "f.txt"
+    target.write_text("old")
+    out = await WriteFileTool().run({"path": str(target), "content": "new"})
+    assert out.startswith("ok:")
+    assert target.read_text() == "new"
+
+
+async def test_write_file_approval_denied(tmp_path: Path):
+    target = tmp_path / "f.txt"
+    tool = WriteFileTool(approve=lambda _cmd: False)
+    out = await tool.run({"path": str(target), "content": "nope"})
+    assert "denied" in out
+    assert not target.exists()
+
+
+async def test_write_file_approval_allowed(tmp_path: Path):
+    target = tmp_path / "f.txt"
+    calls = []
+    def approve(cmd):
+        calls.append(cmd)
+        return True
+    tool = WriteFileTool(approve=approve)
+    out = await tool.run({"path": str(target), "content": "yep"})
+    assert out.startswith("ok:")
+    assert target.read_text() == "yep"
+    assert len(calls) == 1
+    assert str(target) in calls[0]
+
+
+# ---------- apply_edit ----------
+
+_EDIT = (
+    "<<<<<<< SEARCH\n"
+    "{old}\n"
+    "=======\n"
+    "{new}\n"
+    ">>>>>>> REPLACE"
+)
+
+
+async def test_apply_edit_single_block(tmp_path: Path):
+    target = tmp_path / "f.txt"
+    target.write_text("line one\nline two\nline three\n")
+    edits = _EDIT.format(old="line two", new="LINE TWO")
+    out = await ApplyEditTool().run({"path": str(target), "edits": edits})
+    assert out.startswith("ok:")
+    assert target.read_text() == "line one\nLINE TWO\nline three\n"
+
+
+async def test_apply_edit_multiple_blocks(tmp_path: Path):
+    target = tmp_path / "f.txt"
+    target.write_text("alpha\nbeta\ngamma\n")
+    edits = (
+        _EDIT.format(old="alpha", new="ALPHA")
+        + "\n"
+        + _EDIT.format(old="gamma", new="GAMMA")
+    )
+    out = await ApplyEditTool().run({"path": str(target), "edits": edits})
+    assert out.startswith("ok:")
+    assert target.read_text() == "ALPHA\nbeta\nGAMMA\n"
+
+
+async def test_apply_edit_search_not_found_atomic(tmp_path: Path):
+    target = tmp_path / "f.txt"
+    target.write_text("original\n")
+    edits = _EDIT.format(old="nonexistent", new="x")
+    out = await ApplyEditTool().run({"path": str(target), "edits": edits})
+    assert out.startswith("error:")
+    assert "not found" in out
+    # File untouched.
+    assert target.read_text() == "original\n"
+
+
+async def test_apply_edit_ambiguous_match(tmp_path: Path):
+    target = tmp_path / "f.txt"
+    target.write_text("dup\ndup\n")
+    edits = _EDIT.format(old="dup", new="DUP")
+    out = await ApplyEditTool().run({"path": str(target), "edits": edits})
+    assert out.startswith("error:")
+    assert "matches" in out
+    assert target.read_text() == "dup\ndup\n"
+
+
+async def test_apply_edit_no_blocks(tmp_path: Path):
+    target = tmp_path / "f.txt"
+    target.write_text("x\n")
+    out = await ApplyEditTool().run({"path": str(target), "edits": "just text, no blocks"})
+    assert out.startswith("error: no SEARCH/REPLACE blocks")
+
+
+async def test_apply_edit_creates_new_file_with_empty_search(tmp_path: Path):
+    target = tmp_path / "newfile.py"
+    edits = _EDIT.format(old="", new="print('hi')\n")
+    out = await ApplyEditTool().run({"path": str(target), "edits": edits})
+    assert out.startswith("ok: created")
+    assert target.read_text() == "print('hi')\n"
+
+
+async def test_apply_edit_create_refuses_when_exists(tmp_path: Path):
+    target = tmp_path / "exists.py"
+    target.write_text("already here\n")
+    edits = _EDIT.format(old="", new="overwrite\n")
+    out = await ApplyEditTool().run({"path": str(target), "edits": edits})
+    assert out.startswith("error:")
+    assert "exists" in out
+    assert target.read_text() == "already here\n"
+
+
+async def test_apply_edit_approval_denied(tmp_path: Path):
+    target = tmp_path / "f.txt"
+    target.write_text("hello\n")
+    tool = ApplyEditTool(approve=lambda _cmd: False)
+    edits = _EDIT.format(old="hello", new="HELLO")
+    out = await tool.run({"path": str(target), "edits": edits})
+    assert "denied" in out
+    assert target.read_text() == "hello\n"
+
+
+async def test_apply_edit_missing_file(tmp_path: Path):
+    edits = _EDIT.format(old="x", new="y")
+    out = await ApplyEditTool().run({
+        "path": str(tmp_path / "nope.txt"), "edits": edits
+    })
+    assert out.startswith("error: file not found")
+
+
+# ---------- registry composition smoke ----------
+
+async def test_default_registry_contains_all_tools():
+    from codey.tools import build_default_registry
+    reg = build_default_registry(approve=None)
+    names = set(reg.tools)
+    assert names == {"bash", "read_file", "list_dir", "grep", "write_file", "apply_edit"}
+    # Each tool has a non-empty schema.
+    for schema in reg.schemas():
+        assert schema["function"]["name"]
+        assert schema["function"]["description"]
+        assert "parameters" in schema["function"]
