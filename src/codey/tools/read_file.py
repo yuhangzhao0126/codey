@@ -1,4 +1,7 @@
-"""read_file: read a UTF-8 text file from disk and return its contents."""
+"""read_file: read a UTF-8 text file from disk and return its contents.
+
+Permission gating is handled by the PreToolUse permission hook.
+"""
 
 from __future__ import annotations
 
@@ -6,18 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..permissions import PermissionEngine
-from ._gate import gate
-from .bash import ApproveFn
-
 MAX_BYTES = 200_000
 
 
 @dataclass
 class ReadFileTool:
-    engine: PermissionEngine = None  # type: ignore[assignment]
-    approve: ApproveFn | None = None
-
     name: str = "read_file"
     description: str = (
         "Read the contents of a UTF-8 text file from the local filesystem. "
@@ -30,8 +26,6 @@ class ReadFileTool:
     parameters: dict[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        if self.engine is None:
-            self.engine = PermissionEngine()
         self.parameters = {
             "type": "object",
             "properties": {
@@ -48,15 +42,6 @@ class ReadFileTool:
         path_str = (arguments.get("path") or "").strip()
         if not path_str:
             return "error: empty path"
-
-        if denial := await gate(
-            engine=self.engine,
-            approve=self.approve,
-            tool="read_file",
-            arg_str=path_str,
-            summary=f"read {path_str}",
-        ):
-            return denial
 
         path = Path(path_str).expanduser()
         try:

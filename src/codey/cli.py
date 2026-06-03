@@ -17,11 +17,11 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from .agent import (
     Agent,
     AssistantTextDelta,
-    ToolCallRequested,
-    ToolResult,
     TurnCompleted,
 )
+from .builtin_hooks import build_default_hooks
 from .config import ConfigFile
+from .hooks import HookRegistry
 from .permissions import MODE_DESCRIPTIONS, Mode, PermissionEngine, Rule
 from .prompt import build_system_prompt
 from .tools import Verdict, build_default_registry
@@ -42,6 +42,7 @@ class ReplContext:
     cfg: ConfigFile
     agent: Agent
     engine: PermissionEngine
+    hooks: HookRegistry
     commands: dict[str, Command]
 
 
@@ -153,6 +154,40 @@ async def _cmd_permission(ctx: ReplContext, arg: str) -> bool:
     return True
 
 
+async def _cmd_hooks(ctx: ReplContext, arg: str) -> bool:
+    """Subcommands:
+        /hooks                  - list registered hooks
+        /hooks enable <name>    - enable a hook by name
+        /hooks disable <name>   - disable a hook by name
+    """
+    arg = arg.strip()
+    if not arg:
+        hooks = ctx.hooks.list()
+        if not hooks:
+            print("(no hooks registered)\n")
+            return True
+        print("hooks:")
+        for h in hooks:
+            mark = "✓" if h.enabled else "·"
+            print(f"  {mark} {h.event.value:<18} {h.name}")
+        print()
+        return True
+    sub, _, rest = arg.partition(" ")
+    sub = sub.lower()
+    target = rest.strip()
+    if sub in ("enable", "disable") and target:
+        if sub == "disable" and target == "permission":
+            print("(⚠ disabling the permission hook lets the model run any tool unattended)\n")
+        ok = ctx.hooks.enable(target) if sub == "enable" else ctx.hooks.disable(target)
+        if ok:
+            print(f"(hook {target!r} {sub}d)\n")
+        else:
+            print(f"(unknown hook: {target!r})\n")
+        return True
+    print(f"(unknown subcommand: /hooks {sub})\n")
+    return True
+
+
 def _apply_mode(engine: PermissionEngine, new_mode: Mode) -> None:
     engine.save_mode(new_mode)
     warn = " ⚠" if new_mode == Mode.YOLO else ""
@@ -250,6 +285,7 @@ def _build_commands() -> dict[str, Command]:
         Command("profiles",   "list available profiles",                     _cmd_profiles),
         Command("profile",    "switch profile: /profile [name]",             _cmd_profile),
         Command("permission", "permission mode picker; subcommands: status, list, mode <name>",  _cmd_permission),
+        Command("hooks",      "list / enable / disable hooks: /hooks [enable|disable <name>]",   _cmd_hooks),
     ]
     return {c.name: c for c in cmds}
 
@@ -370,14 +406,29 @@ async def _run(profile_arg: str | None) -> None:
     approval_session: PromptSession[str] = PromptSession()
     approver = _make_approver(engine, approval_session)
 
-    tools = build_default_registry(engine=engine, approve=approver)
+    # Transcript writer for the tool-render hook. Styles map to small prefixes.
+    def transcript_writer(style: str, text: str) -> None:
+        sep = "\n" if style == "tool" else ""  # newline before "→ tool(...)"
+        print(f"{sep}  {text}", flush=True)
+
+    def meta_writer(text: str) -> None:
+        print(text, flush=True)
+
+    hooks = build_default_hooks(
+        engine=engine,
+        approve=approver,
+        transcript_writer=transcript_writer,
+        meta_writer=meta_writer,
+    )
+
     agent = Agent(
         profile=profile,
         system_prompt=build_system_prompt(),
-        tools=tools,
+        tools=build_default_registry(),
+        hooks=hooks,
     )
     commands = _build_commands()
-    ctx = ReplContext(cfg=cfg, agent=agent, engine=engine, commands=commands)
+    ctx = ReplContext(cfg=cfg, agent=agent, engine=engine, hooks=hooks, commands=commands)
 
     session: PromptSession[str] = PromptSession(
         completer=SlashCompleter(commands),
@@ -413,11 +464,6 @@ async def _run(profile_arg: str | None) -> None:
                 async for event in agent.run(user_input):
                     if isinstance(event, AssistantTextDelta):
                         print(event.text, end="", flush=True)
-                    elif isinstance(event, ToolCallRequested):
-                        print(f"\n  → tool {event.name}({event.arguments})", flush=True)
-                    elif isinstance(event, ToolResult):
-                        tag = "ok" if event.ok else "err"
-                        print(f"  ← {event.name} [{tag}] {event.content}", flush=True)
                     elif isinstance(event, TurnCompleted):
                         if event.reason == "error":
                             print(f"\n[error] {event.error}", file=sys.stderr)

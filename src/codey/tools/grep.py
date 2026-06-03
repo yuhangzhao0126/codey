@@ -1,4 +1,7 @@
-"""grep: regex search across files."""
+"""grep: regex search across files.
+
+Permission gating is handled by the PreToolUse permission hook.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +9,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-from ..permissions import PermissionEngine
-from ._gate import gate
-from .bash import ApproveFn
 
 MAX_MATCHES = 200
 MAX_FILE_BYTES = 1_000_000  # skip files larger than 1MB
@@ -21,9 +20,6 @@ SKIP_DIRS = frozenset({
 
 @dataclass
 class GrepTool:
-    engine: PermissionEngine = None  # type: ignore[assignment]
-    approve: ApproveFn | None = None
-
     name: str = "grep"
     description: str = (
         "Search for a regex pattern across files under a directory. "
@@ -36,8 +32,6 @@ class GrepTool:
     parameters: dict[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        if self.engine is None:
-            self.engine = PermissionEngine()
         self.parameters = {
             "type": "object",
             "properties": {
@@ -75,16 +69,6 @@ class GrepTool:
             return f"error: invalid regex: {e}"
 
         path_str = (arguments.get("path") or ".").strip() or "."
-
-        if denial := await gate(
-            engine=self.engine,
-            approve=self.approve,
-            tool="grep",
-            arg_str=path_str,
-            summary=f"grep {pattern_str!r} under {path_str}",
-        ):
-            return denial
-
         root = Path(path_str).expanduser()
         glob = arguments.get("glob")
 
@@ -133,4 +117,3 @@ class GrepTool:
             if glob and not sub.match(glob):
                 continue
             yield sub
-

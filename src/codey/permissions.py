@@ -95,6 +95,21 @@ class Ask:
 Decision = Allow | Deny | Ask
 
 
+@dataclass(frozen=True)
+class Verdict:
+    """Result of a user-facing approval prompt.
+
+    Returned by the host's `approve` callback when the engine asks for user
+    consent. `remember=True` tells the permission hook to append a rule to
+    the engine's user/project store so the next matching call won't prompt.
+    """
+    allowed: bool
+    remember: bool = False
+    remember_action: str = "allow"        # "allow" | "deny"
+    remember_pattern: str = ""
+    remember_scope: str = "project"       # "project" | "user"
+
+
 # ---------- which tools are "readers" vs "writers" ----------
 # Mode behavior depends on knowing if a tool mutates state.
 READER_TOOLS = frozenset({"read_file", "list_dir", "grep"})

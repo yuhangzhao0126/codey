@@ -357,58 +357,70 @@ def test_workspace_builtin_deny_still_wins(tmp_path: Path):
     assert isinstance(d, Deny)
 
 
-# ---------- end-to-end with the bash tool ----------
+# ---------- end-to-end with the permission hook ----------
+# (Tools no longer take engine/approve; permission gating lives in the
+# PreToolUse hook in codey.builtin_hooks.permission.)
 
 async def test_bash_uses_engine_for_deny():
-    from codey.tools.bash import BashTool
+    from codey.builtin_hooks.permission import permission_check_hook
     eng = PermissionEngine(mode=Mode.SAFE)
-    tool = BashTool(engine=eng, approve=None)
-    out = await tool.run({"command": "rm -rf /tmp/whatever"})
-    assert out.startswith("error: blocked by permission rule")
+    hook = permission_check_hook(engine=eng, approve=None)
+    result = await hook({"tool": "bash",
+                         "arguments": {"command": "rm -rf /tmp/whatever"},
+                         "call_id": "x"})
+    assert result is not None and result.cancel
+    assert result.result.startswith("error: blocked by permission rule")
 
 
-async def test_bash_yolo_runs_unknown_command(tmp_path: Path):
-    from codey.tools.bash import BashTool
+async def test_bash_yolo_runs_unknown_command():
+    from codey.builtin_hooks.permission import permission_check_hook
     eng = PermissionEngine(mode=Mode.YOLO)
-    tool = BashTool(engine=eng, approve=None)
-    out = await tool.run({"command": f"touch {tmp_path / 'marker'}"})
-    assert "exit=0" in out
-    assert (tmp_path / "marker").exists()
+    hook = permission_check_hook(engine=eng, approve=None)
+    result = await hook({"tool": "bash",
+                         "arguments": {"command": "make whatever"},
+                         "call_id": "x"})
+    # Yolo → allow → hook returns None (proceed)
+    assert result is None
 
 
 async def test_bash_safe_unknown_calls_approver():
-    from codey.tools import Verdict
-    from codey.tools.bash import BashTool
+    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.permissions import Verdict
     eng = PermissionEngine(mode=Mode.SAFE)
     calls = []
     def approve(ctx):
         calls.append(ctx)
         return Verdict(allowed=False)
-    tool = BashTool(engine=eng, approve=approve)
-    out = await tool.run({"command": "npm install"})
+    hook = permission_check_hook(engine=eng, approve=approve)
+    result = await hook({"tool": "bash",
+                         "arguments": {"command": "npm install"},
+                         "call_id": "x"})
     assert len(calls) == 1
     assert calls[0]["tool"] == "bash"
     assert calls[0]["command"] == "npm install"
     assert calls[0]["suggested_pattern"] == "npm install*"
-    assert "denied" in out
+    assert result is not None and result.cancel
+    assert "denied" in result.result
 
 
 async def test_bash_safe_allowlisted_skips_approver():
-    from codey.tools.bash import BashTool
+    from codey.builtin_hooks.permission import permission_check_hook
     eng = PermissionEngine(mode=Mode.SAFE)
     calls = []
     def approve(ctx):
         calls.append(ctx); return True
-    tool = BashTool(engine=eng, approve=approve)
-    out = await tool.run({"command": "echo hi"})
+    hook = permission_check_hook(engine=eng, approve=approve)
+    result = await hook({"tool": "bash",
+                         "arguments": {"command": "echo hi"},
+                         "call_id": "x"})
     assert calls == []
-    assert "hi" in out
+    assert result is None  # allow
 
 
 async def test_bash_remember_appends_user_rule(tmp_path: Path):
-    """Verdict.remember should append a rule via the engine helpers."""
-    from codey.tools import Verdict
-    from codey.tools.bash import BashTool
+    """Verdict.remember should make the permission hook append a user rule."""
+    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.permissions import Verdict
     user_path = tmp_path / "perm.toml"
     eng = PermissionEngine.load(
         user_path=user_path,
@@ -428,24 +440,27 @@ async def test_bash_remember_appends_user_rule(tmp_path: Path):
     orig = perms.USER_PERMISSIONS_PATH
     perms.USER_PERMISSIONS_PATH = user_path
     try:
-        tool = BashTool(engine=eng, approve=approve)
-        out = await tool.run({"command": "npm test"})
+        hook = permission_check_hook(engine=eng, approve=approve)
+        result = await hook({"tool": "bash",
+                             "arguments": {"command": "npm test"},
+                             "call_id": "x"})
     finally:
         perms.USER_PERMISSIONS_PATH = orig
-    assert "exit=" in out  # the command actually ran
+    assert result is None  # allowed
     assert any(r.pattern == "npm test*" and r.action == "allow"
                for r in eng.user_rules)
-    # And persisted to disk:
     assert "npm test*" in user_path.read_text()
 
 
-async def test_write_file_deny_via_project_rule(tmp_path: Path):
-    from codey.tools.write_file import WriteFileTool
+async def test_write_file_deny_via_project_rule():
+    from codey.builtin_hooks.permission import permission_check_hook
     eng = PermissionEngine(
         mode=Mode.SAFE,
         project_rules=[Rule("write_file", "/etc/*", "deny", "protected")],
     )
-    tool = WriteFileTool(engine=eng, approve=None)
-    out = await tool.run({"path": "/etc/passwd", "content": "x"})
-    assert out.startswith("error: blocked by permission rule")
-    assert "protected" in out
+    hook = permission_check_hook(engine=eng, approve=None)
+    result = await hook({"tool": "write_file",
+                         "arguments": {"path": "/etc/passwd", "content": "x"},
+                         "call_id": "x"})
+    assert result is not None and result.cancel
+    assert "protected" in result.result

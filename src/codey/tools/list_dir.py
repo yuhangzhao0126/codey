@@ -1,4 +1,7 @@
-"""list_dir: list directory entries as structured `name | type | size` rows."""
+"""list_dir: list directory entries as structured `name | type | size` rows.
+
+Permission gating is handled by the PreToolUse permission hook.
+"""
 
 from __future__ import annotations
 
@@ -6,18 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..permissions import PermissionEngine
-from ._gate import gate
-from .bash import ApproveFn
-
 MAX_ENTRIES = 500
 
 
 @dataclass
 class ListDirTool:
-    engine: PermissionEngine = None  # type: ignore[assignment]
-    approve: ApproveFn | None = None
-
     name: str = "list_dir"
     description: str = (
         "List the entries of a directory. Returns one row per entry in the form "
@@ -30,8 +26,6 @@ class ListDirTool:
     parameters: dict[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        if self.engine is None:
-            self.engine = PermissionEngine()
         self.parameters = {
             "type": "object",
             "properties": {
@@ -53,15 +47,6 @@ class ListDirTool:
     async def run(self, arguments: dict[str, Any]) -> str:
         path_str = (arguments.get("path") or ".").strip() or "."
         show_hidden = bool(arguments.get("show_hidden", False))
-
-        if denial := await gate(
-            engine=self.engine,
-            approve=self.approve,
-            tool="list_dir",
-            arg_str=path_str,
-            summary=f"list {path_str}",
-        ):
-            return denial
 
         path = Path(path_str).expanduser()
         try:

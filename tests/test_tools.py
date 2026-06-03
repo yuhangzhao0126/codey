@@ -1,4 +1,10 @@
-"""Tests for the file-system / search / edit tools."""
+"""Tests for the file-system / search / edit tools.
+
+Tools themselves are now pure capability functions — permission gating has
+moved to the PreToolUse permission hook. Tests that used to drive permission
+through the tool now drive it through the hook directly (see test_hooks.py for
+broader hook tests; test_permissions.py for engine logic).
+"""
 
 from __future__ import annotations
 
@@ -13,6 +19,20 @@ from codey.tools.read_file import ReadFileTool
 from codey.tools.write_file import WriteFileTool
 
 
+# ---------- helpers ----------
+
+def _run_perm_hook(engine, approve, tool: str, args: dict):
+    """Invoke the permission hook directly, returning the HookResult."""
+    import asyncio
+    from codey.builtin_hooks.permission import permission_check_hook
+    hook = permission_check_hook(engine=engine, approve=approve)
+    payload = {"tool": tool, "arguments": args, "call_id": "test"}
+    result = asyncio.get_event_loop().run_until_complete(hook(payload)) \
+        if False else None
+    # Use asyncio.run safely from a sync helper if not in a loop:
+    return asyncio.run(hook(payload))
+
+
 # ---------- read_file ----------
 
 async def test_read_file_returns_contents(tmp_path: Path):
@@ -22,12 +42,11 @@ async def test_read_file_returns_contents(tmp_path: Path):
     assert out == "hi there\nsecond line\n"
 
 
-# ---------- read_file workspace gating (end-to-end, regression) ----------
+# ---------- read_file workspace gating (now via permission hook) ----------
 
 async def test_read_file_outside_workspace_asks(tmp_path: Path):
-    """A read of a path outside the workspace must reach the approve callback,
-    not silently return contents. This is the bug we shipped before:
-    read_file ignored the engine entirely, so the workspace boundary did nothing."""
+    """The permission hook must consult approve for an outside-workspace read."""
+    from codey.builtin_hooks.permission import permission_check_hook
     from codey.permissions import PermissionEngine, Mode
     inside = tmp_path / "ws"
     outside = tmp_path / "elsewhere"
@@ -41,15 +60,19 @@ async def test_read_file_outside_workspace_asks(tmp_path: Path):
     def approve(ctx):
         seen.append(ctx)
         return False  # deny
-    tool = ReadFileTool(engine=eng, approve=approve)
-    out = await tool.run({"path": str(target)})
+    hook = permission_check_hook(engine=eng, approve=approve)
+    result = await hook({"tool": "read_file",
+                         "arguments": {"path": str(target)},
+                         "call_id": "x"})
     assert len(seen) == 1, f"expected approve to be consulted, got {seen}"
     assert seen[0]["tool"] == "read_file"
     assert "outside the workspace" in (seen[0].get("reason") or "")
-    assert out.startswith("error: user denied")
+    assert result is not None and result.cancel
+    assert result.result.startswith("error: user denied")
 
 
 async def test_read_file_inside_workspace_skips_approval(tmp_path: Path):
+    from codey.builtin_hooks.permission import permission_check_hook
     from codey.permissions import PermissionEngine, Mode
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -57,13 +80,17 @@ async def test_read_file_inside_workspace_skips_approval(tmp_path: Path):
     target.write_text("ok")
     eng = PermissionEngine(mode=Mode.SAFE, workspace=ws.resolve())
     seen = []
-    tool = ReadFileTool(engine=eng, approve=lambda ctx: (seen.append(ctx), True)[1])
-    out = await tool.run({"path": str(target)})
-    assert out == "ok"
-    assert seen == [], "in-workspace reads should not prompt"
+    hook = permission_check_hook(
+        engine=eng, approve=lambda ctx: (seen.append(ctx), True)[1])
+    result = await hook({"tool": "read_file",
+                         "arguments": {"path": str(target)},
+                         "call_id": "x"})
+    assert result is None  # allow (None = proceed)
+    assert seen == []
 
 
 async def test_read_file_yolo_bypasses_workspace(tmp_path: Path):
+    from codey.builtin_hooks.permission import permission_check_hook
     from codey.permissions import PermissionEngine, Mode
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -71,41 +98,50 @@ async def test_read_file_yolo_bypasses_workspace(tmp_path: Path):
     outside.write_text("nope")
     eng = PermissionEngine(mode=Mode.YOLO, workspace=ws.resolve())
     seen = []
-    tool = ReadFileTool(engine=eng, approve=lambda ctx: (seen.append(ctx), True)[1])
-    out = await tool.run({"path": str(outside)})
-    assert out == "nope"
-    assert seen == [], "yolo should bypass the workspace prompt"
+    hook = permission_check_hook(
+        engine=eng, approve=lambda ctx: (seen.append(ctx), True)[1])
+    result = await hook({"tool": "read_file",
+                         "arguments": {"path": str(outside)},
+                         "call_id": "x"})
+    assert result is None
+    assert seen == []
 
 
 async def test_list_dir_outside_workspace_asks(tmp_path: Path):
+    from codey.builtin_hooks.permission import permission_check_hook
     from codey.permissions import PermissionEngine, Mode
     ws = tmp_path / "ws"
     other = tmp_path / "other"
     ws.mkdir(); other.mkdir()
-    (other / "x").write_text("")
     eng = PermissionEngine(mode=Mode.SAFE, workspace=ws.resolve())
     seen = []
-    tool = ListDirTool(engine=eng, approve=lambda ctx: (seen.append(ctx), False)[1])
-    out = await tool.run({"path": str(other)})
+    hook = permission_check_hook(
+        engine=eng, approve=lambda ctx: (seen.append(ctx), False)[1])
+    result = await hook({"tool": "list_dir",
+                         "arguments": {"path": str(other)},
+                         "call_id": "x"})
     assert len(seen) == 1
     assert "outside the workspace" in (seen[0].get("reason") or "")
-    assert out.startswith("error: user denied")
+    assert result is not None and result.cancel
 
 
 async def test_grep_outside_workspace_asks(tmp_path: Path):
+    from codey.builtin_hooks.permission import permission_check_hook
     from codey.permissions import PermissionEngine, Mode
     ws = tmp_path / "ws"
     other = tmp_path / "other"
     ws.mkdir(); other.mkdir()
-    (other / "f.txt").write_text("findme\n")
     eng = PermissionEngine(mode=Mode.SAFE, workspace=ws.resolve())
     seen = []
-    tool = GrepTool(engine=eng, approve=lambda ctx: (seen.append(ctx), False)[1])
-    out = await tool.run({"pattern": "find", "path": str(other)})
+    hook = permission_check_hook(
+        engine=eng, approve=lambda ctx: (seen.append(ctx), False)[1])
+    result = await hook({"tool": "grep",
+                         "arguments": {"pattern": "x", "path": str(other)},
+                         "call_id": "x"})
     assert len(seen) == 1
     assert seen[0]["tool"] == "grep"
     assert "outside the workspace" in (seen[0].get("reason") or "")
-    assert out.startswith("error: user denied")
+    assert result is not None and result.cancel
 
 
 async def test_read_file_missing(tmp_path: Path):
@@ -240,28 +276,8 @@ async def test_write_file_overwrites(tmp_path: Path):
     assert target.read_text() == "new"
 
 
-async def test_write_file_approval_denied(tmp_path: Path):
-    target = tmp_path / "f.txt"
-    tool = WriteFileTool(approve=lambda _cmd: False)
-    out = await tool.run({"path": str(target), "content": "nope"})
-    assert "denied" in out
-    assert not target.exists()
-
-
-async def test_write_file_approval_allowed(tmp_path: Path):
-    target = tmp_path / "f.txt"
-    calls = []
-    def approve(ctx):
-        calls.append(ctx)
-        return True
-    tool = WriteFileTool(approve=approve)
-    out = await tool.run({"path": str(target), "content": "yep"})
-    assert out.startswith("ok:")
-    assert target.read_text() == "yep"
-    assert len(calls) == 1
-    # The new ctx-dict shape includes the path in the 'command' summary string.
-    assert str(target) in calls[0]["command"]
-    assert calls[0]["tool"] == "write_file"
+# Note: approval/permission behavior for write_file is now tested in
+# test_permissions.py and test_hooks.py through the PreToolUse hook.
 
 
 # ---------- apply_edit ----------
@@ -343,14 +359,8 @@ async def test_apply_edit_create_refuses_when_exists(tmp_path: Path):
     assert target.read_text() == "already here\n"
 
 
-async def test_apply_edit_approval_denied(tmp_path: Path):
-    target = tmp_path / "f.txt"
-    target.write_text("hello\n")
-    tool = ApplyEditTool(approve=lambda _cmd: False)
-    edits = _EDIT.format(old="hello", new="HELLO")
-    out = await tool.run({"path": str(target), "edits": edits})
-    assert "denied" in out
-    assert target.read_text() == "hello\n"
+# Note: apply_edit approval behavior is now covered in test_hooks.py via the
+# PreToolUse permission hook.
 
 
 async def test_apply_edit_missing_file(tmp_path: Path):
@@ -365,7 +375,7 @@ async def test_apply_edit_missing_file(tmp_path: Path):
 
 async def test_default_registry_contains_all_tools():
     from codey.tools import build_default_registry
-    reg = build_default_registry(approve=None)
+    reg = build_default_registry()
     names = set(reg.tools)
     assert names == {"bash", "read_file", "list_dir", "grep", "write_file", "apply_edit"}
     # Each tool has a non-empty schema.

@@ -49,7 +49,9 @@ from .agent import (
     TurnCompleted,
     TurnStarted,
 )
+from .builtin_hooks import build_default_hooks
 from .config import ConfigFile, Profile
+from .hooks import HookRegistry
 from .permissions import MODE_DESCRIPTIONS, Mode, PermissionEngine, Rule
 from .prompt import build_system_prompt
 from .tools import Verdict, build_default_registry
@@ -367,10 +369,27 @@ class CodeyApp(App[None]):
 
     async def on_mount(self) -> None:
         profile = self.cfg.resolve(self.profile_arg)
+
+        # Build the default hook set wired to TUI sinks.
+        def transcript_writer(style: str, text: str) -> None:
+            color = {"tool": "yellow", "ok": "green", "err": "red"}.get(style, "white")
+            self.transcript.write(f"  [bold {color}]{text}[/]")
+
+        def meta_writer(text: str) -> None:
+            self._log_meta(text)
+
+        self.hooks = build_default_hooks(
+            engine=self.engine,
+            approve=self._approve_tool,
+            transcript_writer=transcript_writer,
+            meta_writer=meta_writer,
+        )
+
         self.agent = Agent(
             profile=profile,
             system_prompt=build_system_prompt(),
-            tools=build_default_registry(engine=self.engine, approve=self._approve_tool),
+            tools=build_default_registry(),
+            hooks=self.hooks,
         )
         self._refresh_title()
         self._log_meta("codey ready · type / for commands · ctrl+c to quit")
@@ -432,6 +451,8 @@ class CodeyApp(App[None]):
                          lambda app, arg: app._cmd_profile_switch(arg)),
             SlashCommand("permission", "permission mode picker; subcommands: status, list, mode <name>",
                          lambda app, arg: app._cmd_permission(arg)),
+            SlashCommand("hooks",      "list / enable / disable hooks: /hooks [enable|disable <name>]",
+                         lambda app, arg: app._cmd_hooks(arg)),
         ]
         return {c.name: c for c in cmds}
 
@@ -491,6 +512,33 @@ class CodeyApp(App[None]):
                         )
             return
         self._log_error(f"unknown subcommand: /permission {sub}")
+
+    async def _cmd_hooks(self, arg: str) -> None:
+        """Subcommands: (none) → list; enable <name>; disable <name>."""
+        arg = arg.strip()
+        if not arg:
+            hooks = self.hooks.list()
+            if not hooks:
+                self._log_meta("(no hooks registered)")
+                return
+            for h in hooks:
+                mark = "✓" if h.enabled else "·"
+                self._log_meta(f"  {mark} {h.event.value:<18} {h.name}")
+            return
+        sub, _, rest = arg.partition(" ")
+        sub = sub.lower()
+        target = rest.strip()
+        if sub in ("enable", "disable") and target:
+            if sub == "disable" and target == "permission":
+                self._log_meta("(⚠ disabling the permission hook lets the model "
+                               "run any tool unattended)")
+            ok = self.hooks.enable(target) if sub == "enable" else self.hooks.disable(target)
+            if ok:
+                self._log_meta(f"(hook {target!r} {sub}d)")
+            else:
+                self._log_error(f"unknown hook: {target!r}")
+            return
+        self._log_error(f"unknown subcommand: /hooks {sub}")
 
     def _open_mode_picker(self) -> None:
         """Open the mode picker in a worker (push_screen_wait needs one)."""
@@ -754,19 +802,21 @@ class CodeyApp(App[None]):
     async def _stream_turn(self, user_input: str) -> None:
         self._assistant_buf = ""
         async for ev in self.agent.run(user_input):
-            if isinstance(ev, TurnStarted):
-                pass
-            elif isinstance(ev, RoundStarted):
+            if isinstance(ev, (TurnStarted, RoundStarted)):
                 pass
             elif isinstance(ev, AssistantTextDelta):
                 self._assistant_buf += ev.text
             elif isinstance(ev, ToolCallRequested):
+                # Flush accumulated assistant text before the transcript hook
+                # prints the tool call line.
                 if self._assistant_buf.strip():
                     self._log_assistant(self._assistant_buf.strip())
                     self._assistant_buf = ""
-                self._log_tool_call(ev.name, ev.arguments)
+                # The transcript hook (registered in on_mount) prints the
+                # → tool(...) line.
             elif isinstance(ev, ToolResult):
-                self._log_tool_result(ev.name, ev.ok, ev.content)
+                # Hook prints the ← line; nothing to do here.
+                pass
             elif isinstance(ev, AssistantMessageCompleted):
                 self._assistant_buf = ev.text
             elif isinstance(ev, TurnCompleted):

@@ -232,10 +232,13 @@ async def test_ctrl_p_opens_picker():
 # ---------- bash tool readonly path (no UI) ----------
 
 async def test_bash_readonly_runs_without_modal():
+    """Tools no longer take approve themselves; bash just runs the command.
+    The permission hook (test_hooks.py / test_permissions.py) handles gating."""
     from codey.tools.bash import BashTool
-    tool = BashTool(approve=None)
+    tool = BashTool()
     out = await tool.run({"command": "echo hello"})
     assert "hello" in out
+    assert "exit=0" in out
     assert "exit=0" in out
 
 

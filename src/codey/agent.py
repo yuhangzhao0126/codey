@@ -30,6 +30,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Protocol
 from openai import AsyncOpenAI, OpenAIError
 
 from .config import Profile
+from .hooks import HookEvent, HookRegistry
 
 
 # ---------- message schema ----------
@@ -164,6 +165,7 @@ class Agent:
     profile: Profile
     system_prompt: str = ""
     tools: ToolRegistry = field(default_factory=ToolRegistry)
+    hooks: HookRegistry = field(default_factory=HookRegistry)
     history: list[Message] = field(default_factory=list)
     _client: AsyncOpenAI = field(init=False)
 
@@ -189,6 +191,12 @@ class Agent:
     async def run(self, user_input: str) -> AsyncIterator[Event]:
         """Execute one user turn. Yields Events; orchestrates tool rounds.
 
+        Fires hook events at well-defined points:
+          UserPromptSubmit  before the turn starts (may rewrite or cancel)
+          PreToolUse        before each tool call (may rewrite args or cancel)
+          PostToolUse       after each tool call returns
+          Stop              after the turn ends (in try/finally so it always runs)
+
         On any failure (network, API, cancellation), the partially-staged user
         message is rolled back so history stays consistent for the next turn.
         Also repairs history before the request to drop any orphaned
@@ -196,12 +204,27 @@ class Agent:
         the provider will 400 with "no tool output found for function call X".
         """
         self._repair_history()
+
+        # UserPromptSubmit — gives hooks a chance to rewrite or cancel.
+        hr = await self.hooks.trigger(
+            HookEvent.USER_PROMPT_SUBMIT, {"user_input": user_input}
+        )
+        if hr.modified_user_input is not None:
+            user_input = hr.modified_user_input
+        if hr.cancel:
+            yield TurnStarted()
+            yield TurnCompleted(reason="cancelled", error=hr.result)
+            await self.hooks.trigger(HookEvent.STOP, {"reason": "cancelled", "error": hr.result})
+            return
+
         baseline_len = len(self.history)
         self.history.append(Message(role="user", content=user_input))
 
         yield TurnStarted()
 
         assistant_text_parts: list[str] = []
+        stop_reason: str = "stop"
+        stop_error: str | None = None
         try:
             for round_idx in range(MAX_ROUNDS):
                 yield RoundStarted(round=round_idx)
@@ -232,15 +255,35 @@ class Agent:
                         args = json.loads(call["function"].get("arguments") or "{}")
                     except json.JSONDecodeError:
                         args = {}
+
+                    # PreToolUse — hooks may rewrite args or cancel.
+                    pre = await self.hooks.trigger(HookEvent.PRE_TOOL_USE, {
+                        "tool": name, "arguments": args, "call_id": call_id,
+                    })
+                    if pre.modified_arguments is not None:
+                        args = pre.modified_arguments
+
                     yield ToolCallRequested(id=call_id, name=name, arguments=args)
 
-                    ok, content = await self.tools.dispatch(name, args)
+                    if pre.cancel:
+                        ok = False
+                        content = pre.result or "error: tool cancelled by hook"
+                    else:
+                        ok, content = await self.tools.dispatch(name, args)
                     self.history.append(
                         Message(role="tool", tool_call_id=call_id, name=name, content=content)
                     )
                     yield ToolResult(id=call_id, name=name, ok=ok, content=content)
+
+                    # PostToolUse — observers only (errors logged, ignored otherwise).
+                    await self.hooks.trigger(HookEvent.POST_TOOL_USE, {
+                        "tool": name, "arguments": args, "call_id": call_id,
+                        "ok": ok, "result": content,
+                    })
             else:
-                yield TurnCompleted(reason="error", error=f"hit MAX_ROUNDS ({MAX_ROUNDS})")
+                stop_reason = "error"
+                stop_error = f"hit MAX_ROUNDS ({MAX_ROUNDS})"
+                yield TurnCompleted(reason="error", error=stop_error)
                 return
 
             yield AssistantMessageCompleted(text="".join(assistant_text_parts))
@@ -248,6 +291,7 @@ class Agent:
 
         except (KeyboardInterrupt, GeneratorExit):
             del self.history[baseline_len:]
+            stop_reason = "cancelled"
             yield TurnCompleted(reason="cancelled")
             raise
         except BaseException as e:  # noqa: BLE001
@@ -255,7 +299,15 @@ class Agent:
             # timeout, anything mid-stream. We roll back what we appended this
             # turn so the next request starts clean, then surface the error.
             del self.history[baseline_len:]
-            yield TurnCompleted(reason="error", error=f"{type(e).__name__}: {e}")
+            stop_reason = "error"
+            stop_error = f"{type(e).__name__}: {e}"
+            yield TurnCompleted(reason="error", error=stop_error)
+        finally:
+            # Stop fires unconditionally so cleanup hooks (audit log flushes,
+            # token counters, summaries) always run.
+            await self.hooks.trigger(
+                HookEvent.STOP, {"reason": stop_reason, "error": stop_error}
+            )
 
     def _repair_history(self) -> None:
         """Drop trailing assistant.tool_calls messages whose tool results never
