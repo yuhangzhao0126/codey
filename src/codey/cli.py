@@ -66,9 +66,13 @@ async def _cmd_reset(ctx: ReplContext, _arg: str) -> bool:
 
 async def _cmd_model(ctx: ReplContext, _arg: str) -> bool:
     p = ctx.agent.profile
-    print(f"profile : {p.name}")
-    print(f"model   : {p.model}")
-    print(f"base_url: {p.base_url}\n")
+    print(f"profile  : {p.name}")
+    print(f"model    : {p.model}")
+    print(f"base_url : {p.base_url}")
+    workspace = ctx.engine.workspace
+    if workspace is not None:
+        print(f"workspace: {workspace}")
+    print()
     return True
 
 
@@ -359,7 +363,9 @@ def _make_approver(engine: PermissionEngine, session: PromptSession[str]):
 async def _run(profile_arg: str | None) -> None:
     cfg = ConfigFile.load()
     profile = cfg.resolve(profile_arg)
-    engine = PermissionEngine.load()
+    from pathlib import Path
+    workspace = Path.cwd().resolve()
+    engine = PermissionEngine.load(workspace=workspace)
 
     approval_session: PromptSession[str] = PromptSession()
     approver = _make_approver(engine, approval_session)
@@ -379,6 +385,7 @@ async def _run(profile_arg: str | None) -> None:
     )
 
     print(f"codey — profile: {profile.name} | model: {profile.model} @ {profile.base_url}")
+    print(f"workspace: {workspace}")
     print(f"permission mode: {engine.mode.value}"
           + ("  ⚠" if engine.mode == Mode.YOLO else ""))
     print("Type /help for commands.\n")

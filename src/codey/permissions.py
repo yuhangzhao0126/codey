@@ -166,11 +166,18 @@ BUILTIN_ALLOW: list[Rule] = [
 @dataclass
 class PermissionEngine:
     """Holds the active mode plus all rules. Stateless beyond that — checks
-    are pure functions of (tool, args, mode, rules)."""
+    are pure functions of (tool, args, mode, rules, workspace).
+
+    `workspace` is the trust boundary for file-tool calls. When set, any
+    read_file/list_dir/grep/write_file/apply_edit call whose target path
+    resolves outside this directory requires user approval (overridable by
+    a user/project allow rule, bypassed entirely in yolo mode).
+    """
 
     mode: Mode = Mode.SAFE
     user_rules: list[Rule] = field(default_factory=list)
     project_rules: list[Rule] = field(default_factory=list)
+    workspace: Path | None = None
 
     # -- loading --
 
@@ -179,6 +186,7 @@ class PermissionEngine:
         cls,
         user_path: Path | None = None,
         project_path: Path | None = None,
+        workspace: Path | None = None,
     ) -> "PermissionEngine":
         """Read mode + rules from disk. Missing files are not errors."""
         user_path = user_path or USER_PERMISSIONS_PATH
@@ -187,7 +195,12 @@ class PermissionEngine:
         user_mode, user_rules = _load_file(user_path, source="user")
         _, project_rules = _load_file(project_path, source="project")
         mode = user_mode or Mode.SAFE
-        return cls(mode=mode, user_rules=user_rules, project_rules=project_rules)
+        return cls(
+            mode=mode,
+            user_rules=user_rules,
+            project_rules=project_rules,
+            workspace=workspace,
+        )
 
     def save_mode(self, mode: Mode, user_path: Path | None = None) -> None:
         """Persist a new mode into the user permissions file."""
@@ -246,26 +259,61 @@ class PermissionEngine:
             if not _first_match(BUILTIN_ALLOW, tool, arg_str):
                 return Ask(reason="read-only mode: bash requires approval")
 
-        # 6-7. project / user allow rules
+        # 6. workspace boundary for path tools.
+        # If the resolved target is outside the workspace, we want to ASK —
+        # but allow rules (project then user) can override the boundary, so
+        # the user can grant "always allow /etc/hosts" via the approval modal.
+        outside_reason: str | None = None
+        if (
+            self.workspace is not None
+            and tool in PATH_TOOLS
+            and not self._inside_workspace(arg_str)
+        ):
+            outside_reason = f"path is outside the workspace ({self.workspace})"
+
+        # 7. project / user allow rules
         if hit := _first_match(_allows(self.project_rules), tool, arg_str):
             return Allow(reason=hit.reason)
         if hit := _first_match(_allows(self.user_rules), tool, arg_str):
             return Allow(reason=hit.reason)
 
-        # 8-9. project / user ask rules (attach reason to the prompt)
+        # 8. workspace ASK takes effect now (no allow rule rescued it).
+        if outside_reason is not None:
+            return Ask(reason=outside_reason)
+
+        # 9-10. project / user ask rules (attach reason to the prompt)
         if hit := _first_match(_asks(self.project_rules), tool, arg_str):
             return Ask(reason=hit.reason or "matched project ask rule", rule=hit)
         if hit := _first_match(_asks(self.user_rules), tool, arg_str):
             return Ask(reason=hit.reason or "matched user ask rule", rule=hit)
 
-        # 10. built-in allow
+        # 11. built-in allow
         if hit := _first_match(BUILTIN_ALLOW, tool, arg_str):
             return Allow(reason=hit.reason)
 
-        # 11. default by tool kind
+        # 12. default by tool kind
         if tool in READER_TOOLS:
             return Allow()
         return Ask()
+
+    def _inside_workspace(self, arg_str: str) -> bool:
+        """Resolve `arg_str` (a path) and check it's at or below self.workspace.
+        Resolution follows symlinks so a link inside the workspace pointing to
+        /etc is correctly treated as outside."""
+        if self.workspace is None:
+            return True
+        try:
+            resolved = Path(arg_str).expanduser().resolve()
+            workspace = self.workspace.resolve()
+        except (OSError, RuntimeError):
+            # Resolution failed (broken symlink chain, permission, etc.) —
+            # treat as outside so we err on the side of asking.
+            return False
+        try:
+            resolved.relative_to(workspace)
+            return True
+        except ValueError:
+            return False
 
 
 # ---------- helpers ----------

@@ -270,6 +270,93 @@ def test_path_normalization_does_not_affect_bash():
     assert isinstance(d, Ask), d
 
 
+# ---------- workspace trust boundary ----------
+
+def test_workspace_inside_path_allowed(tmp_path: Path):
+    (tmp_path / "f.txt").write_text("x")
+    eng = PermissionEngine(mode=Mode.SAFE, workspace=tmp_path)
+    d = eng.check("read_file", str(tmp_path / "f.txt"))
+    assert isinstance(d, Allow), d
+
+
+def test_workspace_outside_read_asks(tmp_path: Path):
+    eng = PermissionEngine(mode=Mode.SAFE, workspace=tmp_path)
+    d = eng.check("read_file", "/etc/hosts")
+    assert isinstance(d, Ask)
+    assert "outside the workspace" in d.reason
+
+
+def test_workspace_outside_write_asks(tmp_path: Path):
+    eng = PermissionEngine(mode=Mode.SAFE, workspace=tmp_path)
+    d = eng.check("write_file", "/etc/something")
+    assert isinstance(d, Ask)
+    assert "outside the workspace" in d.reason
+
+
+def test_workspace_outside_list_dir_asks(tmp_path: Path):
+    eng = PermissionEngine(mode=Mode.SAFE, workspace=tmp_path)
+    d = eng.check("list_dir", "/etc")
+    assert isinstance(d, Ask)
+
+
+def test_workspace_yolo_bypasses_boundary(tmp_path: Path):
+    eng = PermissionEngine(mode=Mode.YOLO, workspace=tmp_path)
+    assert isinstance(eng.check("read_file", "/etc/hosts"), Allow)
+    assert isinstance(eng.check("write_file", "/etc/foo"), Allow)
+
+
+def test_workspace_user_allow_rule_overrides_boundary(tmp_path: Path):
+    """User can grant 'always allow' via the approval modal even for paths
+    outside the workspace — that's the whole point of the 4-option UX."""
+    eng = PermissionEngine(
+        mode=Mode.SAFE,
+        workspace=tmp_path,
+        user_rules=[Rule("read_file", "/etc/*", "allow", "trusted")],
+    )
+    assert isinstance(eng.check("read_file", "/etc/hosts"), Allow)
+
+
+def test_workspace_symlink_pointing_outside_treated_as_outside(tmp_path: Path):
+    """A symlink inside the workspace that targets /etc should NOT slip past
+    the boundary — we resolve symlinks before checking."""
+    outside = tmp_path / "outside_root"
+    outside.mkdir()
+    (outside / "secret").write_text("hush")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    link = workspace / "back_door"
+    link.symlink_to(outside)
+
+    eng = PermissionEngine(mode=Mode.SAFE, workspace=workspace)
+    d = eng.check("read_file", str(link / "secret"))
+    assert isinstance(d, Ask), d
+    assert "outside" in d.reason
+
+
+def test_workspace_none_means_no_boundary(tmp_path: Path):
+    """Engines built without a workspace (e.g. unit tests, libraries)
+    keep the old behavior — readers default to Allow."""
+    eng = PermissionEngine(mode=Mode.SAFE, workspace=None)
+    assert isinstance(eng.check("read_file", "/etc/hosts"), Allow)
+
+
+def test_workspace_bash_unaffected_by_boundary(tmp_path: Path):
+    """The boundary is for PATH_TOOLS only; bash continues to be governed
+    by its rule-based allow/deny logic, not by cwd."""
+    eng = PermissionEngine(mode=Mode.SAFE, workspace=tmp_path)
+    # Built-in allow still wins.
+    assert isinstance(eng.check("bash", "ls /etc"), Allow)
+    # Unknown bash command still Asks (mode default), no special workspace logic.
+    d = eng.check("bash", "make something")
+    assert isinstance(d, Ask)
+
+
+def test_workspace_builtin_deny_still_wins(tmp_path: Path):
+    eng = PermissionEngine(mode=Mode.SAFE, workspace=tmp_path)
+    d = eng.check("bash", "rm -rf /")
+    assert isinstance(d, Deny)
+
+
 # ---------- end-to-end with the bash tool ----------
 
 async def test_bash_uses_engine_for_deny():

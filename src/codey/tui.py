@@ -346,7 +346,9 @@ class CodeyApp(App[None]):
         super().__init__()
         self.profile_arg = profile_arg
         self.cfg = ConfigFile.load()
-        self.engine: PermissionEngine = PermissionEngine.load()
+        from pathlib import Path as _Path
+        self.workspace = _Path.cwd().resolve()
+        self.engine: PermissionEngine = PermissionEngine.load(workspace=self.workspace)
         self.agent: Agent  # set in on_mount
         self._busy = False
         self._turn_worker: Worker | None = None  # current in-flight model turn
@@ -372,6 +374,7 @@ class CodeyApp(App[None]):
         )
         self._refresh_title()
         self._log_meta("codey ready · type / for commands · ctrl+c to quit")
+        self._log_meta(f"workspace: {self.workspace}")
         self._log_meta(f"permission mode: {self.engine.mode.value}"
                        + ("  ⚠" if self.engine.mode == Mode.YOLO else ""))
         self.query_one(Input).focus()
@@ -439,9 +442,10 @@ class CodeyApp(App[None]):
         # Reads from self.agent.profile, which is updated live by swap_profile,
         # so this always reflects the current runtime.
         p = self.agent.profile
-        self._log_meta(f"profile : {p.name}")
-        self._log_meta(f"model   : {p.model}")
-        self._log_meta(f"base_url: {p.base_url}")
+        self._log_meta(f"profile  : {p.name}")
+        self._log_meta(f"model    : {p.model}")
+        self._log_meta(f"base_url : {p.base_url}")
+        self._log_meta(f"workspace: {self.workspace}")
 
     async def _cmd_permission(self, arg: str) -> None:
         arg = arg.strip()
@@ -562,7 +566,10 @@ class CodeyApp(App[None]):
         p = self.agent.profile
         self.title = "codey"
         mode_str = self.engine.mode.value.upper()
-        self.sub_title = f"{p.name} · {p.model} · mode: {mode_str}"
+        # Show workspace basename so the header stays short; full path is in
+        # the transcript at startup and via /model.
+        ws = self.workspace.name or str(self.workspace)
+        self.sub_title = f"{p.name} · {p.model} · cwd: {ws} · mode: {mode_str}"
 
     def _log_meta(self, text: str) -> None:
         self.transcript.write(f"[dim]{text}[/]")
