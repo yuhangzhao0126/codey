@@ -191,7 +191,11 @@ class Agent:
 
         On any failure (network, API, cancellation), the partially-staged user
         message is rolled back so history stays consistent for the next turn.
+        Also repairs history before the request to drop any orphaned
+        `assistant.tool_calls` from a previously-interrupted turn — otherwise
+        the provider will 400 with "no tool output found for function call X".
         """
+        self._repair_history()
         baseline_len = len(self.history)
         self.history.append(Message(role="user", content=user_input))
 
@@ -242,15 +246,47 @@ class Agent:
             yield AssistantMessageCompleted(text="".join(assistant_text_parts))
             yield TurnCompleted(reason="stop")
 
-        except (OpenAIError, ConnectionError) as e:
-            # Roll back: drop the user msg + any partial assistant/tool entries
-            # we appended this turn, so the next turn starts from a clean state.
-            del self.history[baseline_len:]
-            yield TurnCompleted(reason="error", error=f"{type(e).__name__}: {e}")
         except (KeyboardInterrupt, GeneratorExit):
             del self.history[baseline_len:]
             yield TurnCompleted(reason="cancelled")
             raise
+        except BaseException as e:  # noqa: BLE001
+            # Broad catch: provider error, malformed SSE (JSONDecodeError),
+            # timeout, anything mid-stream. We roll back what we appended this
+            # turn so the next request starts clean, then surface the error.
+            del self.history[baseline_len:]
+            yield TurnCompleted(reason="error", error=f"{type(e).__name__}: {e}")
+
+    def _repair_history(self) -> None:
+        """Drop trailing assistant.tool_calls messages whose tool results never
+        landed (e.g. user cancelled mid-tool-call last turn, or a tool dispatch
+        raised). Walks from the end backwards: any assistant message with
+        tool_calls must be followed by one `role:"tool"` message per call_id."""
+        while self.history:
+            last = self.history[-1]
+            if last.role == "assistant" and last.tool_calls:
+                self.history.pop()
+                continue
+            if last.role == "tool":
+                # tool result with no preceding assistant tool_calls is also junk.
+                # Check by walking back to find the matching assistant call.
+                ids_seen: set[str] = set()
+                i = len(self.history) - 1
+                while i >= 0 and self.history[i].role == "tool":
+                    if self.history[i].tool_call_id:
+                        ids_seen.add(self.history[i].tool_call_id)
+                    i -= 1
+                if i < 0 or self.history[i].role != "assistant" or not self.history[i].tool_calls:
+                    # orphaned tool block; drop just the trailing tool messages
+                    del self.history[i + 1:]
+                    continue
+                expected = {c["id"] for c in self.history[i].tool_calls if c.get("id")}
+                if expected - ids_seen:
+                    # Some tool results are missing for this assistant call;
+                    # drop the whole assistant + tool block.
+                    del self.history[i:]
+                    continue
+            break
 
     def reset(self) -> None:
         """Clear chat history, keeping the system message."""
