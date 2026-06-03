@@ -55,6 +55,14 @@ class Mode(str, Enum):
     YOLO = "yolo"
 
 
+MODE_DESCRIPTIONS: dict[Mode, str] = {
+    Mode.PARANOID:  "ask for every tool call (built-in deny still wins)",
+    Mode.READ_ONLY: "auto-allow readers; writers and unknown bash always ask",
+    Mode.SAFE:      "default — built-in deny/allow rules, unknowns ask",
+    Mode.YOLO:      "no prompts (built-in deny still wins) — careful!",
+}
+
+
 Action = Literal["allow", "deny", "ask"]
 
 

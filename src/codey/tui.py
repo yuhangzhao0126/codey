@@ -50,7 +50,7 @@ from .agent import (
     TurnStarted,
 )
 from .config import ConfigFile, Profile
-from .permissions import Mode, PermissionEngine, Rule
+from .permissions import MODE_DESCRIPTIONS, Mode, PermissionEngine, Rule
 from .prompt import build_system_prompt
 from .tools import Verdict, build_default_registry
 
@@ -219,6 +219,62 @@ class ProfilePickerScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+# ---------- permission-mode picker modal ----------
+
+class ModePickerScreen(ModalScreen[str | None]):
+    """Pick a permission mode with arrow keys. Returns the mode value or None."""
+
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    DEFAULT_CSS = """
+    ModePickerScreen { align: center middle; }
+    #mode-box {
+        width: 90; max-width: 95%;
+        max-height: 60%;
+        padding: 1 2;
+        background: $panel;
+        border: round $primary;
+    }
+    #mode-title { color: $primary; padding-bottom: 1; }
+    #mode-help  { color: $text-muted; padding-top: 1; }
+    OptionList { background: $panel; border: none; }
+    """
+
+    # Order shown top→bottom: safest → most permissive.
+    ORDER = [Mode.PARANOID, Mode.READ_ONLY, Mode.SAFE, Mode.YOLO]
+
+    def __init__(self, active: Mode) -> None:
+        super().__init__()
+        self.active = active
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="mode-box"):
+            yield Static("set permission mode", id="mode-title")
+            options = []
+            initial_index = 0
+            for i, mode in enumerate(self.ORDER):
+                mark = "[bold]*[/] " if mode == self.active else "  "
+                warn = " [b red]⚠[/]" if mode == Mode.YOLO else ""
+                label = f"{mark}{mode.value:<10} [dim]{MODE_DESCRIPTIONS[mode]}[/]{warn}"
+                options.append(Option(label, id=mode.value))
+                if mode == self.active:
+                    initial_index = i
+            yield OptionList(*options, id="mode-list")
+            yield Static("↑/↓ move · enter select · esc cancel", id="mode-help")
+            self._initial_index = initial_index
+
+    def on_mount(self) -> None:
+        ol = self.query_one(OptionList)
+        ol.highlighted = self._initial_index
+        ol.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # ---------- slash-command dropdown ----------
 
 class SlashSuggest(OptionList):
@@ -371,7 +427,7 @@ class CodeyApp(App[None]):
                          lambda app, _: app._cmd_profiles_list()),
             SlashCommand("profile",    "switch profile: /profile [name]",
                          lambda app, arg: app._cmd_profile_switch(arg)),
-            SlashCommand("permission", "permission mode + rules: /permission [mode <name>|list]",
+            SlashCommand("permission", "permission mode picker; subcommands: status, list, mode <name>",
                          lambda app, arg: app._cmd_permission(arg)),
         ]
         return {c.name: c for c in cmds}
@@ -391,15 +447,17 @@ class CodeyApp(App[None]):
         arg = arg.strip()
         eng = self.engine
         if not arg:
-            self._log_meta(f"mode    : {eng.mode.value}")
-            self._log_meta(f"user    : {len(eng.user_rules)} rule(s)")
-            self._log_meta(f"project : {len(eng.project_rules)} rule(s)")
-            self._log_meta("subcommands: mode <safe|paranoid|read-only|yolo>, list")
+            # Bare `/permission` opens the mode picker.
+            self._open_mode_picker()
             return
         sub, _, rest = arg.partition(" ")
         sub = sub.lower()
         if sub == "mode":
             name = rest.strip().lower()
+            if not name:
+                # `/permission mode` (no arg) also opens the picker.
+                self._open_mode_picker()
+                return
             try:
                 new_mode = Mode(name)
             except ValueError:
@@ -408,10 +466,12 @@ class CodeyApp(App[None]):
                     + ", ".join(m.value for m in Mode)
                 )
                 return
-            eng.save_mode(new_mode)
-            self._refresh_title()
-            warn = "  ⚠" if new_mode == Mode.YOLO else ""
-            self._log_meta(f"(permission mode → {new_mode.value}{warn})")
+            self._apply_mode(new_mode)
+            return
+        if sub == "status":
+            self._log_meta(f"mode    : {eng.mode.value}")
+            self._log_meta(f"user    : {len(eng.user_rules)} rule(s)")
+            self._log_meta(f"project : {len(eng.project_rules)} rule(s)")
             return
         if sub == "list":
             if not eng.user_rules and not eng.project_rules:
@@ -427,6 +487,26 @@ class CodeyApp(App[None]):
                         )
             return
         self._log_error(f"unknown subcommand: /permission {sub}")
+
+    def _open_mode_picker(self) -> None:
+        """Open the mode picker in a worker (push_screen_wait needs one)."""
+        async def _pick() -> None:
+            chosen = await self.push_screen_wait(ModePickerScreen(self.engine.mode))
+            if chosen is None:
+                return
+            try:
+                new_mode = Mode(chosen)
+            except ValueError:
+                self._log_error(f"unknown mode: {chosen!r}")
+                return
+            self._apply_mode(new_mode)
+        self.run_worker(_pick(), exclusive=True, group="mode-picker")
+
+    def _apply_mode(self, new_mode: Mode) -> None:
+        self.engine.save_mode(new_mode)
+        self._refresh_title()
+        warn = "  ⚠" if new_mode == Mode.YOLO else ""
+        self._log_meta(f"(permission mode → {new_mode.value}{warn})")
 
     async def _cmd_help(self) -> None:
         width = max(len(c.name) for c in self.slash_commands.values())

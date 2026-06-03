@@ -352,10 +352,47 @@ async def test_escape_cancels_in_flight_turn(monkeypatch):
 async def test_permission_status_shows_mode_and_counts():
     app = CodeyApp(profile_arg=None)
     async with app.run_test() as pilot:
-        await _submit(pilot, "/permission")
+        await _submit(pilot, "/permission status")
         text = _transcript_text(app)
         assert "mode" in text.lower()
         assert "safe" in text.lower()
+
+
+async def test_permission_bare_opens_mode_picker():
+    from codey.tui import ModePickerScreen
+    app = CodeyApp(profile_arg=None)
+    async with app.run_test() as pilot:
+        await _submit(pilot, "/permission")
+        for _ in range(10):
+            if any(isinstance(s, ModePickerScreen) for s in app.screen_stack):
+                break
+            await pilot.pause()
+        assert any(isinstance(s, ModePickerScreen) for s in app.screen_stack), \
+            [type(s).__name__ for s in app.screen_stack]
+
+
+async def test_permission_picker_switch_to_read_only(tmp_path, monkeypatch):
+    import codey.permissions as perms
+    monkeypatch.setattr(perms, "USER_PERMISSIONS_PATH", tmp_path / "permissions.toml")
+    monkeypatch.setattr(perms, "PROJECT_PERMISSIONS_PATH", tmp_path / "_project.toml")
+    from codey.permissions import Mode
+    from codey.tui import ModePickerScreen
+    app = CodeyApp(profile_arg=None)
+    async with app.run_test() as pilot:
+        await _submit(pilot, "/permission")
+        for _ in range(10):
+            if any(isinstance(s, ModePickerScreen) for s in app.screen_stack):
+                break
+            await pilot.pause()
+        # ORDER is [paranoid, read-only, safe, yolo]; SAFE is index 2 (active),
+        # so move up once to land on read-only (index 1).
+        await pilot.press("up")
+        await pilot.press("enter")
+        for _ in range(10):
+            if app.engine.mode == Mode.READ_ONLY:
+                break
+            await pilot.pause()
+        assert app.engine.mode == Mode.READ_ONLY
 
 
 async def test_permission_mode_switch_updates_header(tmp_path, monkeypatch):

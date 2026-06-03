@@ -22,7 +22,7 @@ from .agent import (
     TurnCompleted,
 )
 from .config import ConfigFile
-from .permissions import Mode, PermissionEngine, Rule
+from .permissions import MODE_DESCRIPTIONS, Mode, PermissionEngine, Rule
 from .prompt import build_system_prompt
 from .tools import Verdict, build_default_registry
 
@@ -99,31 +99,39 @@ async def _cmd_profile(ctx: ReplContext, arg: str) -> bool:
 
 async def _cmd_permission(ctx: ReplContext, arg: str) -> bool:
     """Subcommands:
-        /permission                 - show current mode + rule counts
-        /permission mode <name>     - switch mode (persists for user)
+        /permission                 - interactive mode picker
+        /permission status          - show current mode + rule counts
+        /permission mode [<name>]   - switch mode, or open picker if no name
         /permission list            - list user + project rules
     """
     arg = arg.strip()
     eng = ctx.engine
     if not arg:
-        print(f"mode    : {eng.mode.value}")
-        print(f"user    : {len(eng.user_rules)} rule(s)")
-        print(f"project : {len(eng.project_rules)} rule(s)")
-        print("subcommands: mode <safe|paranoid|read-only|yolo>, list\n")
+        chosen = await _pick_mode(eng.mode)
+        if chosen is not None:
+            _apply_mode(eng, chosen)
         return True
     sub, _, rest = arg.partition(" ")
     sub = sub.lower()
+    if sub == "status":
+        print(f"mode    : {eng.mode.value}")
+        print(f"user    : {len(eng.user_rules)} rule(s)")
+        print(f"project : {len(eng.project_rules)} rule(s)\n")
+        return True
     if sub == "mode":
         name = rest.strip().lower()
+        if not name:
+            chosen = await _pick_mode(eng.mode)
+            if chosen is not None:
+                _apply_mode(eng, chosen)
+            return True
         try:
             new_mode = Mode(name)
         except ValueError:
             print(f"(unknown mode: {name!r}; choose: "
                   + ", ".join(m.value for m in Mode) + ")\n")
             return True
-        eng.save_mode(new_mode)
-        warn = " ⚠" if new_mode == Mode.YOLO else ""
-        print(f"(permission mode -> {new_mode.value}{warn})\n")
+        _apply_mode(eng, new_mode)
         return True
     if sub == "list":
         if not eng.user_rules and not eng.project_rules:
@@ -137,8 +145,57 @@ async def _cmd_permission(ctx: ReplContext, arg: str) -> bool:
                     print(f"  {i:>2}  {r.action:<5} {r.tool:<10} {r.pattern}{reason}")
         print()
         return True
-    print(f"(unknown subcommand: /permission {sub}; try /permission)\n")
+    print(f"(unknown subcommand: /permission {sub})\n")
     return True
+
+
+def _apply_mode(engine: PermissionEngine, new_mode: Mode) -> None:
+    engine.save_mode(new_mode)
+    warn = " ⚠" if new_mode == Mode.YOLO else ""
+    print(f"(permission mode → {new_mode.value}{warn})\n")
+
+
+async def _pick_mode(active: Mode) -> Mode | None:
+    """Inline arrow-key picker for permission modes. Returns chosen Mode or None."""
+    order = [Mode.PARANOID, Mode.READ_ONLY, Mode.SAFE, Mode.YOLO]
+    names = [m.value for m in order]
+
+    meta = {
+        m.value: MODE_DESCRIPTIONS[m]
+                 + ("  (active)" if m == active else "")
+                 + (" ⚠" if m == Mode.YOLO else "")
+        for m in order
+    }
+    completer = WordCompleter(names, meta_dict=meta, sentence=True)
+
+    bindings = KeyBindings()
+
+    @bindings.add("c-c")
+    @bindings.add("escape", eager=True)
+    def _cancel(event):
+        event.app.exit(result=None)
+
+    def _pre_run() -> None:
+        get_app().current_buffer.start_completion(select_first=True)
+
+    try:
+        with patch_stdout():
+            choice = await PromptSession().prompt_async(
+                "mode > ",
+                completer=completer,
+                complete_while_typing=True,
+                key_bindings=bindings,
+                pre_run=_pre_run,
+            )
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not choice:
+        return None
+    try:
+        return Mode(choice.strip())
+    except ValueError:
+        print(f"(unknown mode: {choice!r})")
+        return None
 
 
 async def _pick_profile(ctx: ReplContext) -> str | None:
@@ -188,7 +245,7 @@ def _build_commands() -> dict[str, Command]:
         Command("model",      "show the active model / profile / base_url",  _cmd_model),
         Command("profiles",   "list available profiles",                     _cmd_profiles),
         Command("profile",    "switch profile: /profile [name]",             _cmd_profile),
-        Command("permission", "permission mode + rules; /permission help",   _cmd_permission),
+        Command("permission", "permission mode picker; subcommands: status, list, mode <name>",  _cmd_permission),
     ]
     return {c.name: c for c in cmds}
 
