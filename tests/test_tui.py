@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from textual.widgets import Input
 
-from codey.agent import Message
+from codey.agent import (
+    AssistantMessageCompleted,
+    AssistantTextDelta,
+    Message,
+    TurnCompleted,
+    TurnStarted,
+)
 from codey.tui import ApprovalScreen, CodeyApp, ProfilePickerScreen, SlashSuggest
 
 pytestmark = pytest.mark.usefixtures("temp_config")
@@ -206,3 +214,111 @@ async def test_bash_readonly_runs_without_modal():
     out = await tool.run({"command": "echo hello"})
     assert "hello" in out
     assert "exit=0" in out
+
+
+# ---------- busy-state behavior (1-3 from busy/cancel design) ----------
+
+class _SlowAgentRun:
+    """Stand-in for Agent.run that yields one TurnStarted then sleeps until
+    cancelled. Lets us test busy-state UI without a real LLM call."""
+
+    def __init__(self, *_, **__):
+        self.cancelled = False
+
+    def __call__(self, _user_input: str):
+        return self._gen()
+
+    async def _gen(self):
+        yield TurnStarted()
+        try:
+            await asyncio.sleep(10)  # cancelled by the test
+            yield AssistantMessageCompleted(text="should never happen")
+            yield TurnCompleted(reason="stop")
+        except (asyncio.CancelledError, GeneratorExit):
+            self.cancelled = True
+            # Mirror what the real agent does on cancellation.
+            yield TurnCompleted(reason="cancelled")
+            raise
+
+
+async def test_busy_placeholder_changes_while_turn_in_flight(monkeypatch):
+    app = CodeyApp(profile_arg=None)
+    async with app.run_test() as pilot:
+        slow = _SlowAgentRun()
+        monkeypatch.setattr(app.agent, "run", slow)
+        inp = app.query_one(Input)
+        assert inp.placeholder == CodeyApp.IDLE_PLACEHOLDER
+
+        await _submit(pilot, "hello")
+        # Let the worker tick so _set_busy(True) runs.
+        for _ in range(10):
+            if app._busy:
+                break
+            await pilot.pause()
+        assert app._busy is True
+        assert inp.placeholder == CodeyApp.BUSY_PLACEHOLDER
+
+        # Cancel and confirm placeholder flips back.
+        assert app._cancel_current_turn() is True
+        for _ in range(20):
+            if not app._busy:
+                break
+            await pilot.pause()
+        assert app._busy is False
+        assert inp.placeholder == CodeyApp.IDLE_PLACEHOLDER
+
+
+async def test_second_submit_while_busy_is_announced(monkeypatch):
+    app = CodeyApp(profile_arg=None)
+    async with app.run_test() as pilot:
+        slow = _SlowAgentRun()
+        monkeypatch.setattr(app.agent, "run", slow)
+
+        await _submit(pilot, "first")
+        for _ in range(10):
+            if app._busy:
+                break
+            await pilot.pause()
+        assert app._busy is True
+
+        # Second submit should NOT enqueue or send; it should log a friendly note
+        # and preserve the input value the user has typed.
+        inp = app.query_one(Input)
+        inp.focus()
+        inp.value = "second"
+        await inp.action_submit()
+        await pilot.pause()
+
+        text = _transcript_text(app).lower()
+        assert "busy" in text, text
+        # The user's typed second message must not have been cleared.
+        assert inp.value == "second"
+
+        # Clean up.
+        app._cancel_current_turn()
+        for _ in range(20):
+            if not app._busy:
+                break
+            await pilot.pause()
+
+
+async def test_escape_cancels_in_flight_turn(monkeypatch):
+    app = CodeyApp(profile_arg=None)
+    async with app.run_test() as pilot:
+        slow = _SlowAgentRun()
+        monkeypatch.setattr(app.agent, "run", slow)
+
+        await _submit(pilot, "go")
+        for _ in range(10):
+            if app._busy:
+                break
+            await pilot.pause()
+        assert app._busy is True
+
+        await pilot.press("escape")
+        for _ in range(20):
+            if not app._busy:
+                break
+            await pilot.pause()
+        assert app._busy is False
+        assert slow.cancelled is True

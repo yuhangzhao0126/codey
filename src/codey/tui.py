@@ -233,14 +233,18 @@ class CodeyApp(App[None]):
         self.cfg = ConfigFile.load()
         self.agent: Agent  # set in on_mount
         self._busy = False
+        self._turn_worker: Worker | None = None  # current in-flight model turn
         self._assistant_buf = ""
         self.slash_commands: dict[str, SlashCommand] = self._build_slash_commands()
+
+    IDLE_PLACEHOLDER = "message codey — / for commands"
+    BUSY_PLACEHOLDER = "codey is working… (esc to cancel)"
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         yield RichLog(id="transcript", wrap=True, markup=True, highlight=False, auto_scroll=True)
         yield SlashSuggest(id="slash-suggest")
-        yield Input(placeholder="message codey — / for commands", id="input-row")
+        yield Input(placeholder=self.IDLE_PLACEHOLDER, id="input-row")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -412,9 +416,13 @@ class CodeyApp(App[None]):
         inp.focus()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        if self._busy:
-            return
         text = event.value.strip()
+        if self._busy:
+            # Don't clobber the user's typing; tell them what's going on.
+            self._log_meta(
+                "(busy — press esc to cancel the current turn, or wait)"
+            )
+            return
         event.input.clear()
         suggest = self.query_one(SlashSuggest)
         suggest.styles.display = "none"
@@ -427,39 +435,70 @@ class CodeyApp(App[None]):
             return
 
         self._log_user(text)
-        self._busy = True
+        self._set_busy(True)
         # Run the model turn in a worker so push_screen_wait (used by the
-        # bash-approval modal) has a worker context.
-        self.run_worker(self._stream_turn_and_release(text),
-                        exclusive=True, group="agent-turn")
+        # bash-approval modal) has a worker context, AND so we can cancel it.
+        self._turn_worker = self.run_worker(
+            self._stream_turn_and_release(text),
+            exclusive=True, group="agent-turn",
+        )
 
     async def _stream_turn_and_release(self, user_input: str) -> None:
         try:
             await self._stream_turn(user_input)
         finally:
-            self._busy = False
+            self._set_busy(False)
+            self._turn_worker = None
 
-    # -- key routing: arrow keys steer the dropdown when it's visible --
+    def _set_busy(self, busy: bool) -> None:
+        """Flip busy state and update the input placeholder so the user can see it."""
+        self._busy = busy
+        try:
+            inp = self.query_one(Input)
+        except Exception:  # noqa: BLE001
+            return
+        inp.placeholder = self.BUSY_PLACEHOLDER if busy else self.IDLE_PLACEHOLDER
+
+    def _cancel_current_turn(self) -> bool:
+        """Cancel an in-flight model turn. Returns True if a turn was cancelled."""
+        if not self._busy or self._turn_worker is None:
+            return False
+        self._turn_worker.cancel()
+        # _stream_turn_and_release's finally clause will clear _busy and emit
+        # the cancellation Event from the agent loop.
+        self._log_meta("(cancelling current turn…)")
+        return True
+
+    # -- key routing: arrow keys steer the dropdown when it's visible;
+    #    escape cancels an in-flight turn when nothing else needs it --
 
     async def on_key(self, event) -> None:
         suggest = self.query_one(SlashSuggest)
-        if suggest.styles.display == "none" or suggest.option_count == 0:
-            return
-        if event.key in ("down", "up"):
-            current = suggest.highlighted or 0
-            n = suggest.option_count
-            suggest.highlighted = (current + (1 if event.key == "down" else -1)) % n
-            event.stop()
-        elif event.key == "enter":
-            opt = suggest.get_option_at_index(suggest.highlighted or 0)
-            if opt and opt.id:
-                inp = self.query_one(Input)
-                inp.value = f"/{opt.id} "
-                inp.cursor_position = len(inp.value)
+        dropdown_open = suggest.styles.display != "none" and suggest.option_count > 0
+
+        if dropdown_open:
+            if event.key in ("down", "up"):
+                current = suggest.highlighted or 0
+                n = suggest.option_count
+                suggest.highlighted = (current + (1 if event.key == "down" else -1)) % n
+                event.stop()
+                return
+            if event.key == "enter":
+                opt = suggest.get_option_at_index(suggest.highlighted or 0)
+                if opt and opt.id:
+                    inp = self.query_one(Input)
+                    inp.value = f"/{opt.id} "
+                    inp.cursor_position = len(inp.value)
+                    suggest.styles.display = "none"
+                    event.stop()
+                return
+            if event.key == "escape":
                 suggest.styles.display = "none"
                 event.stop()
-        elif event.key == "escape":
-            suggest.styles.display = "none"
+                return
+
+        # Dropdown isn't open. Use escape to cancel an in-flight turn.
+        if event.key == "escape" and self._cancel_current_turn():
             event.stop()
 
     # -- slash command dispatch with substring match --
