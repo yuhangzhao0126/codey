@@ -1,3 +1,174 @@
 # codey
 
-My own coding agent.
+A minimal terminal-based coding agent. Talks to any OpenAI-compatible API,
+runs tools on your machine (shell, file read/write/search, in-place edits),
+and works in either a line-based REPL or a Textual full-screen UI.
+
+Built as a learning project — small enough to read end-to-end (~1.5k LOC),
+big enough to be genuinely useful for day-to-day coding tasks.
+
+```
+┌── codey ─── deepseek · deepseek-v4-pro · https://api.deepseek.com/v1 ──┐
+│                                                                        │
+│ you  › what python version does this project require?                  │
+│   → bash(command='grep python pyproject.toml')                         │
+│   ← bash [ok]                                                          │
+│       requires-python = ">=3.11"                                       │
+│ codey› This project requires Python 3.11 or higher.                    │
+│                                                                        │
+│ > █                                                                    │
+│ ctrl+c quit · ctrl+r reset · ctrl+p profile                            │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+## What codey can do
+
+- **Chat** with any OpenAI-compatible model (OpenAI, DeepSeek, Anthropic via
+  proxy, local servers like Agent Maestro / Ollama / vLLM).
+- **Run tools** the model asks for, with safety prompts where they matter:
+  - `bash` — shell commands; read-only commands (`ls`, `cat`, `git status` …)
+    auto-run, anything else asks for approval
+  - `read_file` — UTF-8 file contents
+  - `list_dir` — structured directory listing
+  - `grep` — regex search across files (skips `.git`, `.venv`, etc.)
+  - `write_file` — create/overwrite a file (asks first)
+  - `apply_edit` — aider-style search/replace block edits (asks first)
+- **Switch providers/models on the fly** via profiles in `~/.config/codey/config.toml`,
+  with `/profile [name]` or `ctrl+p` for an inline picker.
+- **Stream responses** so you see output as the model produces it.
+- **Cancel a runaway turn** with `esc` in the TUI.
+
+## Setup
+
+Requirements: **Python ≥ 3.11** and [**uv**](https://github.com/astral-sh/uv).
+
+```bash
+git clone https://github.com/yuhangzhao0126/codey.git
+cd codey
+uv sync                                  # creates .venv, installs deps
+```
+
+### Configure a profile
+
+Create `~/.config/codey/config.toml` (codey will bootstrap one from `.env`
+on first run if it doesn't exist, but writing it directly is simpler):
+
+```toml
+default_profile = "openai"
+
+[profiles.openai]
+base_url = "https://api.openai.com/v1"
+api_key  = "sk-..."
+model    = "gpt-4o-mini"
+
+[profiles.deepseek]
+base_url = "https://api.deepseek.com/v1"
+api_key  = "sk-..."
+model    = "deepseek-chat"
+
+# Local / OpenAI-compatible server (e.g. Ollama, vLLM, Agent Maestro)
+[profiles.local]
+base_url = "http://localhost:11434/v1"
+api_key  = "sk-local"
+model    = "llama3.1"
+```
+
+Each profile is a self-contained `(base_url, api_key, model)` bundle.
+
+## Run
+
+### REPL (default)
+```bash
+uv run codey                       # use default_profile
+uv run codey -p deepseek           # pick a profile for this run
+```
+
+### TUI
+```bash
+uv run codey --tui
+uv run codey --tui -p deepseek
+```
+
+### Slash commands (work in both modes)
+
+| Command           | Description                                                            |
+|-------------------|------------------------------------------------------------------------|
+| `/help`           | show all commands                                                      |
+| `/exit`           | quit                                                                   |
+| `/reset`          | clear chat history (keeps system prompt)                               |
+| `/model`          | show the active profile / model / base_url                             |
+| `/profiles`       | list available profiles                                                |
+| `/profile`        | open the inline arrow-key picker                                       |
+| `/profile <name>` | switch directly to a profile                                           |
+
+Commands are **searchable** — type `/pro` to see a dropdown of matches; pick
+one with ↑/↓ + Enter.
+
+### Hotkeys (TUI only)
+
+| Key       | Action                                       |
+|-----------|----------------------------------------------|
+| `ctrl+c`  | quit                                         |
+| `ctrl+r`  | clear history                                |
+| `ctrl+p`  | open the profile picker                      |
+| `esc`     | close the slash-command dropdown, OR cancel an in-flight model turn |
+
+## System prompt customization
+
+codey's prompt is built by **appending** three layers (all optional except the
+default):
+
+1. **Default** — ships with the package
+2. **User** — `~/.config/codey/system.md`
+3. **Project** — `./codey.md` in the directory where you run codey
+
+This works exactly like CLAUDE.md: the agent's core identity stays constant
+and each project layers on its own context (e.g. "this repo uses pnpm not npm").
+
+## Adding a new tool
+
+Drop a class in `src/codey/tools/<your_tool>.py` that satisfies the `Tool`
+Protocol (four attributes: `name`, `description`, `parameters`, async `run`),
+then register it with one line in `src/codey/tools/__init__.py`:
+
+```python
+reg.register(YourTool())
+```
+
+The agent loop and both UIs need no changes. See `tools/read_file.py` for the
+simplest example or `tools/bash.py` for the approval-aware pattern.
+
+## Project layout
+
+```
+src/codey/
+  agent.py       # core agent loop: streaming, tool dispatch, multi-round, cancellation
+  config.py      # profile loading from ~/.config/codey/config.toml
+  prompt.py      # 3-layer system prompt assembly
+  cli.py         # prompt_toolkit line REPL
+  tui.py         # Textual full-screen UI
+  prompts/
+    system.md    # default system prompt
+  tools/
+    __init__.py  # ToolRegistry composition
+    bash.py
+    read_file.py
+    list_dir.py
+    grep.py
+    write_file.py
+    apply_edit.py
+tests/           # pytest + Textual Pilot integration tests
+```
+
+## Tests
+
+```bash
+uv run pytest
+```
+
+47 tests across the agent, tools, and TUI. The TUI tests run headlessly via
+Textual's `Pilot` — no real terminal needed.
+
+## License
+
+Personal project, no formal license. Read it, learn from it, fork it.
