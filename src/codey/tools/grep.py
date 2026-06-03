@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..permissions import PermissionEngine
+from ._gate import gate
+from .bash import ApproveFn
+
 MAX_MATCHES = 200
 MAX_FILE_BYTES = 1_000_000  # skip files larger than 1MB
 SKIP_DIRS = frozenset({
@@ -17,17 +21,23 @@ SKIP_DIRS = frozenset({
 
 @dataclass
 class GrepTool:
+    engine: PermissionEngine = None  # type: ignore[assignment]
+    approve: ApproveFn | None = None
+
     name: str = "grep"
     description: str = (
         "Search for a regex pattern across files under a directory. "
         "Returns matching lines in the form `path:lineno:matched-line`. "
         "Recursively walks the directory but skips common dependency / build "
         "folders (.git, .venv, node_modules, __pycache__, dist, build) and "
-        "files larger than 1MB. Capped at 200 total matches."
+        "files larger than 1MB. Capped at 200 total matches. Subject to the "
+        "active permission rules — paths outside the workspace require approval."
     )
     parameters: dict[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
+        if self.engine is None:
+            self.engine = PermissionEngine()
         self.parameters = {
             "type": "object",
             "properties": {
@@ -64,13 +74,23 @@ class GrepTool:
         except re.error as e:
             return f"error: invalid regex: {e}"
 
-        root = Path((arguments.get("path") or ".").strip() or ".").expanduser()
+        path_str = (arguments.get("path") or ".").strip() or "."
+
+        if denial := await gate(
+            engine=self.engine,
+            approve=self.approve,
+            tool="grep",
+            arg_str=path_str,
+            summary=f"grep {pattern_str!r} under {path_str}",
+        ):
+            return denial
+
+        root = Path(path_str).expanduser()
         glob = arguments.get("glob")
 
         if not root.exists():
             return f"error: path not found: {root}"
 
-        # Build the file iterator
         if root.is_file():
             candidates = iter([root])
         else:
@@ -106,7 +126,6 @@ class GrepTool:
     def _walk(root: Path, glob: str | None):
         """Yield files under root, skipping SKIP_DIRS and applying optional glob."""
         for sub in root.rglob("*"):
-            # Skip anything inside a SKIP_DIRS directory.
             if any(part in SKIP_DIRS for part in sub.parts):
                 continue
             if not sub.is_file():
@@ -114,3 +133,4 @@ class GrepTool:
             if glob and not sub.match(glob):
                 continue
             yield sub
+

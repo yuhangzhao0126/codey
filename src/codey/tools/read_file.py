@@ -6,22 +6,32 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..permissions import PermissionEngine
+from ._gate import gate
+from .bash import ApproveFn
+
 MAX_BYTES = 200_000
 
 
 @dataclass
 class ReadFileTool:
+    engine: PermissionEngine = None  # type: ignore[assignment]
+    approve: ApproveFn | None = None
+
     name: str = "read_file"
     description: str = (
         "Read the contents of a UTF-8 text file from the local filesystem. "
         "Returns the full file contents (capped at 200KB). Use this to inspect "
         "source files, configs, logs, etc. before deciding what to change. "
         "Returns an error string (starting with 'error:') if the file is missing, "
-        "binary, or too large."
+        "binary, or too large. Subject to the active permission rules — paths "
+        "outside the workspace require user approval."
     )
     parameters: dict[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
+        if self.engine is None:
+            self.engine = PermissionEngine()
         self.parameters = {
             "type": "object",
             "properties": {
@@ -38,6 +48,16 @@ class ReadFileTool:
         path_str = (arguments.get("path") or "").strip()
         if not path_str:
             return "error: empty path"
+
+        if denial := await gate(
+            engine=self.engine,
+            approve=self.approve,
+            tool="read_file",
+            arg_str=path_str,
+            summary=f"read {path_str}",
+        ):
+            return denial
+
         path = Path(path_str).expanduser()
         try:
             data = path.read_bytes()

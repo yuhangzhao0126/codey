@@ -22,6 +22,92 @@ async def test_read_file_returns_contents(tmp_path: Path):
     assert out == "hi there\nsecond line\n"
 
 
+# ---------- read_file workspace gating (end-to-end, regression) ----------
+
+async def test_read_file_outside_workspace_asks(tmp_path: Path):
+    """A read of a path outside the workspace must reach the approve callback,
+    not silently return contents. This is the bug we shipped before:
+    read_file ignored the engine entirely, so the workspace boundary did nothing."""
+    from codey.permissions import PermissionEngine, Mode
+    inside = tmp_path / "ws"
+    outside = tmp_path / "elsewhere"
+    inside.mkdir()
+    outside.mkdir()
+    target = outside / "secret.txt"
+    target.write_text("password=hunter2")
+
+    eng = PermissionEngine(mode=Mode.SAFE, workspace=inside.resolve())
+    seen = []
+    def approve(ctx):
+        seen.append(ctx)
+        return False  # deny
+    tool = ReadFileTool(engine=eng, approve=approve)
+    out = await tool.run({"path": str(target)})
+    assert len(seen) == 1, f"expected approve to be consulted, got {seen}"
+    assert seen[0]["tool"] == "read_file"
+    assert "outside the workspace" in (seen[0].get("reason") or "")
+    assert out.startswith("error: user denied")
+
+
+async def test_read_file_inside_workspace_skips_approval(tmp_path: Path):
+    from codey.permissions import PermissionEngine, Mode
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    target = ws / "open.txt"
+    target.write_text("ok")
+    eng = PermissionEngine(mode=Mode.SAFE, workspace=ws.resolve())
+    seen = []
+    tool = ReadFileTool(engine=eng, approve=lambda ctx: (seen.append(ctx), True)[1])
+    out = await tool.run({"path": str(target)})
+    assert out == "ok"
+    assert seen == [], "in-workspace reads should not prompt"
+
+
+async def test_read_file_yolo_bypasses_workspace(tmp_path: Path):
+    from codey.permissions import PermissionEngine, Mode
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    outside = tmp_path / "anything.txt"
+    outside.write_text("nope")
+    eng = PermissionEngine(mode=Mode.YOLO, workspace=ws.resolve())
+    seen = []
+    tool = ReadFileTool(engine=eng, approve=lambda ctx: (seen.append(ctx), True)[1])
+    out = await tool.run({"path": str(outside)})
+    assert out == "nope"
+    assert seen == [], "yolo should bypass the workspace prompt"
+
+
+async def test_list_dir_outside_workspace_asks(tmp_path: Path):
+    from codey.permissions import PermissionEngine, Mode
+    ws = tmp_path / "ws"
+    other = tmp_path / "other"
+    ws.mkdir(); other.mkdir()
+    (other / "x").write_text("")
+    eng = PermissionEngine(mode=Mode.SAFE, workspace=ws.resolve())
+    seen = []
+    tool = ListDirTool(engine=eng, approve=lambda ctx: (seen.append(ctx), False)[1])
+    out = await tool.run({"path": str(other)})
+    assert len(seen) == 1
+    assert "outside the workspace" in (seen[0].get("reason") or "")
+    assert out.startswith("error: user denied")
+
+
+async def test_grep_outside_workspace_asks(tmp_path: Path):
+    from codey.permissions import PermissionEngine, Mode
+    ws = tmp_path / "ws"
+    other = tmp_path / "other"
+    ws.mkdir(); other.mkdir()
+    (other / "f.txt").write_text("findme\n")
+    eng = PermissionEngine(mode=Mode.SAFE, workspace=ws.resolve())
+    seen = []
+    tool = GrepTool(engine=eng, approve=lambda ctx: (seen.append(ctx), False)[1])
+    out = await tool.run({"pattern": "find", "path": str(other)})
+    assert len(seen) == 1
+    assert seen[0]["tool"] == "grep"
+    assert "outside the workspace" in (seen[0].get("reason") or "")
+    assert out.startswith("error: user denied")
+
+
 async def test_read_file_missing(tmp_path: Path):
     out = await ReadFileTool().run({"path": str(tmp_path / "nope.txt")})
     assert out.startswith("error: file not found")

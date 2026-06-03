@@ -31,9 +31,9 @@ def build_default_registry(
         engine = PermissionEngine()
     reg = ToolRegistry()
     reg.register(BashTool(engine=engine, approve=approve))
-    reg.register(ReadFileTool())
-    reg.register(ListDirTool())
-    reg.register(GrepTool())
+    reg.register(ReadFileTool(engine=engine, approve=approve))
+    reg.register(ListDirTool(engine=engine, approve=approve))
+    reg.register(GrepTool(engine=engine, approve=approve))
     reg.register(WriteFileTool(engine=engine, approve=approve))
     reg.register(ApplyEditTool(engine=engine, approve=approve))
     return reg

@@ -6,21 +6,32 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..permissions import PermissionEngine
+from ._gate import gate
+from .bash import ApproveFn
+
 MAX_ENTRIES = 500
 
 
 @dataclass
 class ListDirTool:
+    engine: PermissionEngine = None  # type: ignore[assignment]
+    approve: ApproveFn | None = None
+
     name: str = "list_dir"
     description: str = (
         "List the entries of a directory. Returns one row per entry in the form "
         "`type  size  name` where type is `dir`, `file`, or `link`, size is bytes "
         "(or `-` for non-files), and entries are sorted alphabetically. By default "
-        "hidden entries (starting with `.`) are skipped. Capped at 500 entries."
+        "hidden entries (starting with `.`) are skipped. Capped at 500 entries. "
+        "Subject to the active permission rules — paths outside the workspace "
+        "require user approval."
     )
     parameters: dict[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
+        if self.engine is None:
+            self.engine = PermissionEngine()
         self.parameters = {
             "type": "object",
             "properties": {
@@ -42,8 +53,17 @@ class ListDirTool:
     async def run(self, arguments: dict[str, Any]) -> str:
         path_str = (arguments.get("path") or ".").strip() or "."
         show_hidden = bool(arguments.get("show_hidden", False))
-        path = Path(path_str).expanduser()
 
+        if denial := await gate(
+            engine=self.engine,
+            approve=self.approve,
+            tool="list_dir",
+            arg_str=path_str,
+            summary=f"list {path_str}",
+        ):
+            return denial
+
+        path = Path(path_str).expanduser()
         try:
             entries = sorted(path.iterdir(), key=lambda p: p.name)
         except FileNotFoundError:
