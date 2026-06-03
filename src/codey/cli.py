@@ -62,6 +62,14 @@ async def _cmd_reset(ctx: ReplContext, _arg: str) -> bool:
     return True
 
 
+async def _cmd_model(ctx: ReplContext, _arg: str) -> bool:
+    p = ctx.agent.profile
+    print(f"profile : {p.name}")
+    print(f"model   : {p.model}")
+    print(f"base_url: {p.base_url}\n")
+    return True
+
+
 async def _cmd_profiles(ctx: ReplContext, _arg: str) -> bool:
     active = ctx.agent.profile.name
     print("profiles:")
@@ -136,6 +144,7 @@ def _build_commands() -> dict[str, Command]:
         Command("exit",     "quit codey",                                  _cmd_exit),
         Command("help",     "show this help",                              _cmd_help),
         Command("reset",    "clear chat history (keeps system prompt)",    _cmd_reset),
+        Command("model",    "show the active model / profile / base_url",  _cmd_model),
         Command("profiles", "list available profiles",                     _cmd_profiles),
         Command("profile",  "switch profile: /profile [name]",             _cmd_profile),
     ]

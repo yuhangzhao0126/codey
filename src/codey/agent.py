@@ -169,8 +169,20 @@ class Agent:
 
     def __post_init__(self) -> None:
         self._client = self._build_client(self.profile)
+        self.history.append(Message(role="system", content=self._compose_system_message()))
+
+    def _compose_system_message(self) -> str:
+        """User-supplied prompt + a runtime note so the model can answer
+        questions like 'what model are you?' accurately."""
+        runtime_note = (
+            f"You are being served via the OpenAI-compatible API at "
+            f"`{self.profile.base_url}` as model `{self.profile.model}` "
+            f"(profile: `{self.profile.name}`). When the user asks what model "
+            f"or provider you are, answer from this information."
+        )
         if self.system_prompt:
-            self.history.append(Message(role="system", content=self.system_prompt))
+            return f"{self.system_prompt}\n\n{runtime_note}"
+        return runtime_note
 
     # -- public API --
 
@@ -246,6 +258,8 @@ class Agent:
 
     async def swap_profile(self, profile: Profile) -> None:
         """Switch provider/model live. Keeps chat history; closes the old client.
+        Rebuilds the system message so the in-prompt runtime note (base_url +
+        model + profile name) reflects the new profile.
 
         Caveat: existing history may include provider-specific fields (tool_calls,
         etc.) that the new model handles differently. If the next `run()` fails,
@@ -254,6 +268,12 @@ class Agent:
         old = self._client
         self.profile = profile
         self._client = self._build_client(profile)
+
+        # Refresh the in-history system message so the model knows where it's running.
+        new_system = self._compose_system_message()
+        non_system = [m for m in self.history if m.role != "system"]
+        self.history = [Message(role="system", content=new_system)] + non_system
+
         try:
             await old.close()
         except Exception:  # noqa: BLE001

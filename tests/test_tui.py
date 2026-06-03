@@ -55,8 +55,30 @@ async def test_help_lists_all_commands():
     async with app.run_test() as pilot:
         await _submit(pilot, "/help")
         text = _transcript_text(app)
-        for cmd in ("/exit", "/help", "/reset", "/profile", "/profiles"):
+        for cmd in ("/exit", "/help", "/reset", "/model", "/profile", "/profiles"):
             assert cmd in text, f"{cmd} missing from /help output: {text!r}"
+
+
+# ---------- /model — reflects active profile, follows runtime swaps ----------
+
+async def test_model_shows_active_profile_and_follows_switch():
+    app = CodeyApp(profile_arg=None)
+    async with app.run_test() as pilot:
+        await _submit(pilot, "/model")
+        text = _transcript_text(app)
+        assert "alpha" in text
+        assert "alpha-model" in text
+        assert "example.com/alpha/v1" in text
+        # Switch and ask again — output must reflect the new profile.
+        await _submit(pilot, "/profile beta")
+        for _ in range(10):
+            if app.agent.profile.name == "beta":
+                break
+            await pilot.pause()
+        await _submit(pilot, "/model")
+        text = _transcript_text(app)
+        assert "beta-model" in text
+        assert "example.com/beta/v1" in text
 
 
 # ---------- /reset ----------

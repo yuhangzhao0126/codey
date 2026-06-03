@@ -279,6 +279,8 @@ class CodeyApp(App[None]):
                          lambda app, _: app._cmd_help()),
             SlashCommand("reset",    "clear chat history (keeps system prompt)",
                          lambda app, _: app._cmd_reset()),
+            SlashCommand("model",    "show the active model / profile / base_url",
+                         lambda app, _: app._cmd_model()),
             SlashCommand("profiles", "list available profiles",
                          lambda app, _: app._cmd_profiles_list()),
             SlashCommand("profile",  "switch profile: /profile [name]",
@@ -288,6 +290,14 @@ class CodeyApp(App[None]):
 
     async def _cmd_exit(self) -> None:
         self.exit()
+
+    async def _cmd_model(self) -> None:
+        # Reads from self.agent.profile, which is updated live by swap_profile,
+        # so this always reflects the current runtime.
+        p = self.agent.profile
+        self._log_meta(f"profile : {p.name}")
+        self._log_meta(f"model   : {p.model}")
+        self._log_meta(f"base_url: {p.base_url}")
 
     async def _cmd_help(self) -> None:
         width = max(len(c.name) for c in self.slash_commands.values())
