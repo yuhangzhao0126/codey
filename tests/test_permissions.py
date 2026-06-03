@@ -227,6 +227,49 @@ def test_suggest_pattern_file_tool_uses_parent_glob(tmp_path: Path):
     assert "/x" in s
 
 
+# ---------- path normalization for file tools (regression) ----------
+
+def test_rule_with_expanded_path_matches_tilde_arg():
+    """Rule saved as `/Users/me/Desktop/*` must match the model's `~/Desktop/foo`
+    (the bug that made approved rules look like they were ignored)."""
+    home = str(Path("~").expanduser())
+    eng = PermissionEngine(
+        mode=Mode.SAFE,
+        project_rules=[Rule("apply_edit", f"{home}/Desktop/*", "allow", "ok")],
+    )
+    d = eng.check("apply_edit", "~/Desktop/hello.py")
+    assert isinstance(d, Allow), d
+
+
+def test_rule_with_tilde_pattern_matches_expanded_arg():
+    """Symmetry: a rule saved as `~/Desktop/*` should also match an arg that
+    arrives already expanded."""
+    home = str(Path("~").expanduser())
+    eng = PermissionEngine(
+        mode=Mode.SAFE,
+        user_rules=[Rule("write_file", "~/Desktop/*", "allow", "ok")],
+    )
+    d = eng.check("write_file", f"{home}/Desktop/note.txt")
+    assert isinstance(d, Allow), d
+
+
+def test_path_normalization_does_not_affect_bash():
+    """`~` expansion is path-tool only; bash commands still match literally
+    so we don't surprise the user by silently expanding tildes in commands.
+    Use a command (`make`) that isn't in any built-in rule so the only
+    possible match path is the user rule."""
+    eng = PermissionEngine(
+        mode=Mode.SAFE,
+        user_rules=[Rule("bash", "make ~/foo", "allow")],
+    )
+    # Same literal string matches.
+    assert isinstance(eng.check("bash", "make ~/foo"), Allow)
+    # Expanded form does NOT match (it's a different command from bash's POV).
+    home = str(Path("~").expanduser())
+    d = eng.check("bash", f"make {home}/foo")
+    assert isinstance(d, Ask), d
+
+
 # ---------- end-to-end with the bash tool ----------
 
 async def test_bash_uses_engine_for_deny():

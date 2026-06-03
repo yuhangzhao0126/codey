@@ -101,6 +101,12 @@ READER_TOOLS = frozenset({"read_file", "list_dir", "grep"})
 WRITER_TOOLS = frozenset({"write_file", "apply_edit"})
 # bash is special: handled by rules, not by classification.
 
+# Tools whose canonical arg_str is a filesystem path. For these we expand `~`
+# on both sides during matching so rules saved with one form (e.g.
+# `/Users/me/Desktop/*`) match calls in the other form (e.g. `~/Desktop/foo`)
+# and vice versa.
+PATH_TOOLS = READER_TOOLS | WRITER_TOOLS
+
 
 # ---------- built-in rules ----------
 # These ship with the package and CANNOT be removed by user config.
@@ -264,10 +270,21 @@ class PermissionEngine:
 
 # ---------- helpers ----------
 
+def _expand_for_path_tool(s: str) -> str:
+    """Expand a leading `~` so two equivalent path strings compare equal."""
+    if s.startswith("~"):
+        return str(Path(s).expanduser())
+    return s
+
+
 def _match(rule: Rule, tool: str, arg_str: str) -> bool:
     if rule.tool not in (tool, "*"):
         return False
-    return fnmatch.fnmatchcase(arg_str, rule.pattern)
+    pattern = rule.pattern
+    if tool in PATH_TOOLS:
+        arg_str = _expand_for_path_tool(arg_str)
+        pattern = _expand_for_path_tool(pattern)
+    return fnmatch.fnmatchcase(arg_str, pattern)
 
 
 def _first_match(rules: Iterable[Rule], tool: str, arg_str: str) -> Rule | None:
