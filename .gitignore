@@ -32,3 +32,4 @@ build/
 *.tsbuildinfo
 .npm/
 .pnpm-store/
+.codey/

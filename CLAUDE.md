@@ -40,33 +40,59 @@ Python **≥ 3.11** (uses `tomllib`). Use `uv add` / `uv remove` for deps;
 
 ## Architecture
 
-The core data flow is one round of `Agent.run()`. Read `src/codey/agent.py`
+The core data flow is one round of `Agent.run()`. Read `src/codey/core/turn.py`
 top-to-bottom before changing any of it — the comments there are the source
 of truth.
 
 ```
 src/codey/
-  agent.py          # Agent.run() = the turn loop. Streaming, multi-round
-                    # tool dispatch, history repair, error rollback,
-                    # cancellation. Fires hook events.
-  hooks.py          # HookEvent, HookResult, HookRegistry — small pub/sub
-  builtin_hooks/    # The four hooks codey ships with:
-    permission.py   #   PreToolUse → consults PermissionEngine
-    audit_log.py    #   Pre+PostToolUse → ~/.cache/codey/calls.jsonl
-    transcript.py   #   Pre+PostToolUse → renders → / ← lines in UI
-    stop_logger.py  #   Stop → [turn finished: ...] meta line
-  permissions.py    # PermissionEngine + Mode + Rule. Built-in deny/allow
-                    # lists, mode shortcuts (paranoid/read-only/safe/yolo),
-                    # workspace boundary, TOML I/O.
+  app.py            # Entry point: argparse + CodeyApp.run()
+  __main__.py       # `python -m codey` shim
+
+  core/             # Agent loop + message/event types + Session bundle
+    turn.py         #   Agent.run() = the turn loop. Multi-round dispatch,
+                    #   history repair, error rollback, cancellation.
+    streaming.py    #   _stream_one_round + tool_call fragment reassembly
+    history.py      #   _repair_history (free function, independently tested)
+    messages.py     #   Role, Message, Message.to_wire()
+    events.py       #   TurnStarted, RoundStarted, AssistantTextDelta, …
+    agent.py        #   Tool Protocol + ToolRegistry dataclass
+    session.py      #   Session: bundles Profile + Agent + PermissionEngine
+                    #   + HookRegistry + ToolRegistry; one host-facing handle
+
+  hooks/            # Cross-cutting observers / decision points
+    registry.py     #   HookEvent, HookResult, HookRegistry — small pub/sub
+    builtin/        #   The hooks codey ships with:
+      permission.py #     PreToolUse → consults PermissionEngine
+      audit_log.py  #     Pre+PostToolUse → ~/.cache/codey/calls.jsonl
+      transcript.py #     Pre+PostToolUse → renders → / ← lines in UI
+      stop_logger.py#     Stop → [turn finished: ...] meta line
+      todo_nag.py   #     Reminds the model to plan after quiet rounds
+      todo_render.py#     Renders the todo list into the UI
+
+  permissions/      # "What is the agent allowed to do"
+    rules.py        #   Mode, Rule, Verdict, BUILTIN_DENY/ALLOW
+    engine.py       #   PermissionEngine + check() + workspace boundary
+    io.py           #   ~/.config/codey/permissions.toml + ./.codey/...
+    suggest.py      #   suggest_pattern() for the Remember modal
+
   tools/            # Pure capability functions. NO permission logic here —
                     # gating happens in the PreToolUse hook.
     bash.py read_file.py list_dir.py grep.py
-    write_file.py apply_edit.py
+    write_file.py apply_edit.py todo_write.py
+
   config.py         # Profile loading from ~/.config/codey/config.toml
   prompt.py         # 3-layer system prompt: package default → user
                     # → ./codey.md (this file)
-  tui.py            # Textual full-screen UI + slash commands + modals
   prompts/system.md # default system prompt (always loaded)
+
+  ui/               # Textual full-screen UI (was tui.py)
+    app.py          #   CodeyApp — compose, on_mount, key routing
+    streaming.py    #   _stream_turn — consumes core.events, batches deltas
+    slash_commands.py / slash_suggest.py
+    renderers.py    #   _log_* helpers + UISinks
+    modals/         #   approval.py, remember.py, profile_picker.py,
+                    #   mode_picker.py
 ```
 
 ### How a turn flows
@@ -108,8 +134,8 @@ break it, fix it before committing. New behavior gets a new test.
 A `Tool` has four attributes: `name`, `description`, `parameters` (JSON
 Schema), `async run(arguments)`. They don't take an `engine`, don't take an
 `approve` callback, don't open modals, don't print. Permission gating is a
-**hook** (see `builtin_hooks/permission.py`); rendering is a hook
-(`builtin_hooks/transcript.py`). Adding a new tool is one file + one line
+**hook** (see `hooks/builtin/permission.py`); rendering is a hook
+(`hooks/builtin/transcript.py`). Adding a new tool is one file + one line
 in `tools/__init__.py:build_default_registry`. See `README.md` § "Adding a
 new tool" for the recipe.
 
@@ -122,7 +148,7 @@ next prompt.
 ### Permission gating is the hook, not the tool
 If you find yourself wanting to add an `engine` argument to a tool, stop.
 Add the gating logic to the permission hook or add a new rule to the
-built-in lists in `permissions.py`. The whole point of the v2 hook
+built-in lists in `permissions/rules.py`. The whole point of the v2 hook
 refactor was to make tools un-aware of permissions.
 
 ### History invariants
@@ -133,7 +159,7 @@ flow — but if you add a new code path that mutates `self.history` outside
 `run()`, double-check.
 
 ### Don't hardcode permission policy in tools
-Built-in denylist / allowlist live in `permissions.py`. User rules in
+Built-in denylist / allowlist live in `permissions/rules.py`. User rules in
 `~/.config/codey/permissions.toml`. Project rules in
 `./.codey/permissions.toml`. There should never be `if command in
 DESTRUCTIVE: ...` inside a tool's `run()`.
@@ -141,7 +167,7 @@ DESTRUCTIVE: ...` inside a tool's `run()`.
 ### Bash vs file-tool path matching
 File tools (read_file/list_dir/grep/write_file/apply_edit) treat `~/foo` and
 `/Users/me/foo` as equivalent in rule matching — that's
-`_expand_for_path_tool` in `permissions.py`. Bash matches literally because
+`_expand_for_path_tool` in `permissions/engine.py`. Bash matches literally because
 shell expansion is the shell's job. Don't change this asymmetry without
 reading the test in `test_permissions.py::test_path_normalization_does_not_affect_bash`.
 
@@ -151,10 +177,11 @@ That's the only place that asks the user about a tool call. Don't add a
 second prompt path.
 
 ### Streaming output buffer (TUI)
-`_stream_turn` accumulates `AssistantTextDelta` into `_assistant_buf` and
-flushes on `ToolCallRequested` / `TurnCompleted`. If you change how text
-gets rendered, preserve this batching — otherwise tool calls interleave
-with mid-sentence assistant text and the transcript becomes unreadable.
+`ui/streaming.py:_stream_turn` accumulates `AssistantTextDelta` into the
+app's `_assistant_buf` and flushes on `ToolCallRequested` /
+`TurnCompleted`. If you change how text gets rendered, preserve this
+batching — otherwise tool calls interleave with mid-sentence assistant
+text and the transcript becomes unreadable.
 
 ### Don't write Markdown docs unless asked
 This project has README.md and CLAUDE.md and that's the only documentation
@@ -177,19 +204,20 @@ that should exist. Don't create plan / design / summary files.
 | If you're adding… | Put it in |
 |---|---|
 | A new tool | `src/codey/tools/<name>.py` + register in `tools/__init__.py` |
-| A new hook (observe/decide/rewrite at a known point) | `src/codey/builtin_hooks/<name>.py` + register in `builtin_hooks/__init__.py` |
-| A new built-in permission rule | `BUILTIN_DENY` or `BUILTIN_ALLOW` in `permissions.py` |
-| A new slash command | `tui.py:_build_slash_commands()` |
+| A new hook (observe/decide/rewrite at a known point) | `src/codey/hooks/builtin/<name>.py` + register in `hooks/builtin/__init__.py` |
+| A new built-in permission rule | `BUILTIN_DENY` or `BUILTIN_ALLOW` in `permissions/rules.py` |
+| A new slash command | `ui/slash_commands.py:_build_slash_commands()` |
 | A new test | `tests/test_<area>.py`, async-style, using existing fixtures in `tests/conftest.py` |
-| New CLI flag | `tui.py:main()` argparse + thread through to `run()` |
+| New CLI flag | `app.py:main()` argparse + thread through to `Session.build` / `CodeyApp` |
 
 ## Things NOT to do
 
-- Don't add a top-level `tools.py` next to `agent.py` — tools live in
-  `tools/`. Same for `hooks` vs `hooks/`.
+- Don't reintroduce top-level `agent.py`, `tui.py`, `permissions.py`,
+  `hooks.py`, or `builtin_hooks/`. They were intentionally split into
+  `core/`, `ui/`, `permissions/`, and `hooks/` (see Architecture).
 - Don't reintroduce `_gate.py`. Permission gating is a hook.
 - Don't make `Agent` depend on `Profile` mutating — `Profile` is frozen.
-  Use `swap_profile()` to switch.
+  Use `Session.swap_profile()` (or `Agent.swap_profile()` directly) to switch.
 - Don't add a `--no-permission-check` CLI flag. Use `--profile` + a
   yolo-mode permissions.toml, or `/permission mode yolo`.
 - Don't bypass `uv` (no `pip install`, no `pip-tools`).
@@ -198,12 +226,13 @@ that should exist. Don't create plan / design / summary files.
 
 ## Known things-in-flux
 
-- `_assistant_buf` flushing logic in TUI is brittle around mid-stream tool
-  calls. Watch for visual glitches; fix by changing when we flush, not by
-  changing event semantics.
-- `Verdict` lives in `permissions.py` but is re-exported from
-  `tools/bash.py` for backward compat. The re-export can go away once we
-  stop importing `Verdict` from `codey.tools`.
+- `_assistant_buf` flushing logic in `ui/streaming.py` is brittle around
+  mid-stream tool calls. Watch for visual glitches; fix by changing when
+  we flush, not by changing event semantics.
+- `Verdict` lives in `permissions/rules.py` (re-exported from
+  `codey.permissions`) but is also re-exported from `tools/bash.py` for
+  backward compat. The re-export can go away once we stop importing
+  `Verdict` from `codey.tools`.
 - Hook return type is `HookResult | None` everywhere. There's an open
   question about whether `str` should also be allowed as a shorthand for
   `HookResult(cancel=True, result=str)` — discussed but not implemented.

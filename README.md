@@ -135,20 +135,26 @@ simplest example or `tools/bash.py` for the approval-aware pattern.
 
 ```
 src/codey/
-  agent.py       # core agent loop: streaming, tool dispatch, multi-round, cancellation
+  app.py         # entry point: argparse + CodeyApp.run()
+  __main__.py    # `python -m codey`
   config.py      # profile loading from ~/.config/codey/config.toml
   prompt.py      # 3-layer system prompt assembly
-  tui.py         # Textual full-screen UI
   prompts/
     system.md    # default system prompt
-  tools/
-    __init__.py  # ToolRegistry composition
-    bash.py
-    read_file.py
-    list_dir.py
-    grep.py
-    write_file.py
-    apply_edit.py
+  core/          # agent loop + Session + message/event types
+    turn.py streaming.py history.py messages.py events.py
+    agent.py session.py
+  hooks/         # pub/sub registry + built-in hooks
+    registry.py
+    builtin/     # permission, audit_log, transcript, stop_logger,
+                 # todo_nag, todo_render
+  permissions/   # rules, engine, TOML I/O, suggest_pattern
+  tools/         # bash, read_file, list_dir, grep, write_file,
+                 # apply_edit, todo_write
+  ui/            # Textual app + modals + slash commands + renderers
+    app.py streaming.py renderers.py
+    slash_commands.py slash_suggest.py
+    modals/      # approval, remember, profile_picker, mode_picker
 tests/           # pytest + Textual Pilot integration tests
 ```
 
