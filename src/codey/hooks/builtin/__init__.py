@@ -15,6 +15,7 @@ from ..registry import HookEvent, HookRegistry
 from ...permissions import PermissionEngine
 from ...tools.todo_write import TodoWriteTool
 from .audit_log import audit_log_hook
+from .otel import build_otel_hooks, otel_enabled
 from .permission import ApproveFn, permission_check_hook
 from .stop_logger import stop_logger_hook
 from .todo_nag import build_todo_nag_hooks
@@ -38,6 +39,7 @@ def build_default_hooks(
     todo_tool: TodoWriteTool | None = None,
     todo_writer: TodoWriter | None = None,
     session_id: str | None = None,
+    otel: dict | None = None,
 ) -> HookRegistry:
     reg = HookRegistry(error_sink=meta_writer)
 
@@ -84,12 +86,31 @@ def build_default_hooks(
         reg.register(HookEvent.POST_TOOL_USE, post, name="todo_nag_post")
         reg.register(HookEvent.STOP,          stop, name="todo_nag_stop")
 
+    # OTel tracing — opt-in via the otel dict (built by the host from the
+    # --otel flag / CODEY_OTEL env var / [otel] config block).
+    if otel is not None:
+        cbs = build_otel_hooks(
+            session_id=session_id or "",
+            profile_name=otel["profile_name"],
+            model=otel["model"],
+            base_url=otel["base_url"],
+            service_name=otel.get("service_name"),
+            endpoint=otel.get("endpoint"),
+            tracer_provider=otel.get("tracer_provider"),
+        )
+        reg.register(HookEvent.USER_PROMPT_SUBMIT, cbs["user_prompt_submit"], name="otel_turn_start")
+        reg.register(HookEvent.PRE_TOOL_USE,       cbs["pre_tool_use"],       name="otel_tool_pre")
+        reg.register(HookEvent.POST_TOOL_USE,      cbs["post_tool_use"],      name="otel_tool_post")
+        reg.register(HookEvent.STOP,               cbs["stop"],               name="otel_turn_stop")
+
     return reg
 
 
 __all__ = [
     "build_default_hooks",
     "audit_log_hook",
+    "build_otel_hooks",
+    "otel_enabled",
     "permission_check_hook",
     "pre_tool_render_hook",
     "post_tool_render_hook",

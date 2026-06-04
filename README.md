@@ -80,6 +80,8 @@ Each profile is a self-contained `(base_url, api_key, model)` bundle.
 ```bash
 uv run codey                       # use default_profile
 uv run codey -p deepseek           # pick a profile for this run
+uv run codey --otel                # also emit OpenTelemetry spans
+                                   #   (requires: uv sync --extra observability)
 ```
 
 ### Slash commands
@@ -130,6 +132,39 @@ reg.register(YourTool())
 
 The agent loop and both UIs need no changes. See `tools/read_file.py` for the
 simplest example or `tools/bash.py` for the approval-aware pattern.
+
+## Debugging
+
+The TUI deliberately hides per-call `→ tool(...)` / `← tool [ok]` lines so the
+conversation reads cleanly. To see what tools are running, you have two options:
+
+**Tail the audit log** — every tool call is recorded as one line of JSON:
+
+```bash
+tail -f ~/.cache/codey/calls.jsonl | jq .
+# Filter to one session:
+jq 'select(.session_id == "8f3a2b")' ~/.cache/codey/calls.jsonl
+```
+
+**Attach an OpenTelemetry viewer** — `--otel` emits spans for every turn and
+nested tool call. First install the optional extra:
+
+```bash
+uv sync --extra observability
+```
+
+Point at any OTel collector (Jaeger, Tempo, Honeycomb, Datadog, …) by setting
+`OTEL_EXPORTER_OTLP_ENDPOINT`. For local LLM-aware tracing, [Arize Phoenix](https://github.com/Arize-ai/phoenix)
+runs in one container:
+
+```bash
+docker run -p 6006:6006 -p 4318:4318 arizephoenix/phoenix:latest
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 uv run codey --otel
+# open http://localhost:6006
+```
+
+`CODEY_OTEL=1` and a `[otel] enabled = true` block in `~/.config/codey/config.toml`
+also turn it on, so you can leave the flag off and keep tracing always-on.
 
 ## Project layout
 

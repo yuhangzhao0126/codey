@@ -89,9 +89,10 @@ class CodeyApp(App[None]):
     # Disable Textual's built-in ctrl+p command palette; we use ctrl+p for our picker.
     ENABLE_COMMAND_PALETTE = False
 
-    def __init__(self, profile_arg: str | None) -> None:
+    def __init__(self, profile_arg: str | None, otel: bool = False) -> None:
         super().__init__()
         self.profile_arg = profile_arg
+        self._otel_enabled = otel
         self.session: Session  # set in on_mount
         self._busy = False
         self._turn_worker: Worker | None = None  # current in-flight model turn
@@ -149,10 +150,26 @@ class CodeyApp(App[None]):
             approve=self._approve_tool,
             todo_writer=todo_writer,
         )
-        self.session = Session.build(
-            profile_arg=self.profile_arg,
-            ui_sinks=sinks,
-        )
+        try:
+            self.session = Session.build(
+                profile_arg=self.profile_arg,
+                ui_sinks=sinks,
+                otel_enabled=self._otel_enabled,
+            )
+        except Exception as e:  # noqa: BLE001
+            # Surface a friendly error rather than letting OTel-extra-missing
+            # crash the whole UI on startup.
+            from ..hooks.builtin.otel import OTelExtraMissing
+            if isinstance(e, OTelExtraMissing):
+                self._log_error(str(e))
+                # Fall back to building without OTel so the rest of the TUI works.
+                self.session = Session.build(
+                    profile_arg=self.profile_arg,
+                    ui_sinks=sinks,
+                    otel_enabled=False,
+                )
+            else:
+                raise
 
         self._refresh_title()
         self._log_meta("codey ready · type / for commands · ctrl+c to quit")
@@ -511,17 +528,27 @@ class CodeyApp(App[None]):
             event.stop()
 
 
-def run(profile_arg: str | None) -> None:
-    app = CodeyApp(profile_arg=profile_arg)
+def run(profile_arg: str | None, otel: bool = False) -> None:
+    app = CodeyApp(profile_arg=profile_arg, otel=otel)
     app.run()
 
 
 def main() -> None:
     import argparse
+    from ..hooks.builtin import otel_enabled as _otel_env_enabled
     parser = argparse.ArgumentParser(prog="codey", description="codey — a coding agent")
     parser.add_argument(
         "--profile", "-p",
         help="profile name from ~/.config/codey/config.toml (overrides $CODEY_PROFILE)",
     )
+    parser.add_argument(
+        "--otel", action="store_true",
+        help="emit OpenTelemetry spans for every turn + tool call "
+             "(requires: uv sync --extra observability)",
+    )
     args = parser.parse_args()
-    run(args.profile)
+    # Resolve the OTel toggle from any of: --otel flag, CODEY_OTEL env var,
+    # or the config.toml [otel] block (loaded inside Session.build via the
+    # already-resolved config — but for the CLI flag we just OR them).
+    otel_on = args.otel or _otel_env_enabled()
+    run(args.profile, otel=otel_on)

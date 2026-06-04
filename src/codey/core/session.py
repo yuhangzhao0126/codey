@@ -63,6 +63,7 @@ class Session:
         profile_arg: str | None,
         ui_sinks: UISinks,
         workspace: Path | None = None,
+        otel_enabled: bool = False,
     ) -> "Session":
         cfg = ConfigFile.load()
         profile = cfg.resolve(profile_arg)
@@ -70,6 +71,13 @@ class Session:
         engine = PermissionEngine.load(workspace=ws)
         tools = build_default_registry()
         session_id = uuid.uuid4().hex[:8]
+        otel_cfg: dict | None = None
+        if otel_enabled:
+            otel_cfg = {
+                "profile_name": profile.name,
+                "model": profile.model,
+                "base_url": profile.base_url,
+            }
         hooks = build_default_hooks(
             engine=engine,
             approve=ui_sinks.approve,
@@ -78,6 +86,7 @@ class Session:
             todo_tool=tools.tools.get("todo_write"),
             todo_writer=ui_sinks.todo_writer,
             session_id=session_id,
+            otel=otel_cfg,
         )
         agent = Agent(
             profile=profile,

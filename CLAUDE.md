@@ -69,6 +69,7 @@ src/codey/
       stop_logger.py#     Stop → [turn finished: ...] meta line
       todo_nag.py   #     Reminds the model to plan after quiet rounds
       todo_render.py#     Renders the todo list into the UI
+      otel.py       #     Opt-in OpenTelemetry tracing (--otel / CODEY_OTEL=1)
 
   permissions/      # "What is the agent allowed to do"
     rules.py        #   Mode, Rule, Verdict, BUILTIN_DENY/ALLOW
