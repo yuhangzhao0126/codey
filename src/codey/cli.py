@@ -394,6 +394,38 @@ def _make_approver(engine: PermissionEngine, session: PromptSession[str]):
     return approve
 
 
+def _make_todo_writer() -> Callable[[list], None]:
+    """Build a writer that prints the todo list to stdout with ANSI styling.
+
+    Completed items are dimmed and strike-through. In-progress is bold. Pending
+    is plain.
+    """
+    DIM = "\x1b[2m"
+    BOLD = "\x1b[1m"
+    STRIKE_ON = "\x1b[9m"
+    STRIKE_OFF = "\x1b[29m"
+    RESET = "\x1b[0m"
+
+    def writer(todos: list) -> None:
+        if not todos:
+            print(f"\n  {DIM}─── tasks (cleared) ───{RESET}\n", flush=True)
+            return
+        lines = [f"\n  {DIM}─── tasks ───{RESET}"]
+        for t in todos:
+            if t.status == "completed":
+                lines.append(
+                    f"  {DIM}[x] {STRIKE_ON}{t.content}{STRIKE_OFF}{RESET}"
+                )
+            elif t.status == "in_progress":
+                lines.append(f"  {BOLD}[~] {t.content}{RESET}")
+            else:
+                lines.append(f"  [ ] {t.content}")
+        lines.append("")
+        print("\n".join(lines), flush=True)
+
+    return writer
+
+
 # ---------- main loop ----------
 
 async def _run(profile_arg: str | None) -> None:
@@ -414,17 +446,23 @@ async def _run(profile_arg: str | None) -> None:
     def meta_writer(text: str) -> None:
         print(text, flush=True)
 
+    tool_registry = build_default_registry()
+    todo_tool = tool_registry.tools.get("todo_write")
+    todo_writer = _make_todo_writer() if todo_tool is not None else None
+
     hooks = build_default_hooks(
         engine=engine,
         approve=approver,
         transcript_writer=transcript_writer,
         meta_writer=meta_writer,
+        todo_tool=todo_tool,
+        todo_writer=todo_writer,
     )
 
     agent = Agent(
         profile=profile,
         system_prompt=build_system_prompt(),
-        tools=build_default_registry(),
+        tools=tool_registry,
         hooks=hooks,
     )
     commands = _build_commands()
