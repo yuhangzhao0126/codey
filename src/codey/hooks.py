@@ -54,11 +54,15 @@ class HookResult:
                              tool. Subsequent hooks see this rewrite.
       modified_user_input:   UserPromptSubmit only. Rewrites the user input
                              before it goes into history.
+      modified_post_result:  PostToolUse only. Rewrites the tool result text
+                             both subsequent hooks see (via payload) and the
+                             agent records in history.
     """
     cancel: bool = False
     result: str | None = None
     modified_arguments: dict[str, Any] | None = None
     modified_user_input: str | None = None
+    modified_post_result: str | None = None
 
 
 # A hook callback receives the payload dict and returns a HookResult or None.
@@ -157,6 +161,9 @@ class HookRegistry:
             if hr.modified_user_input is not None:
                 merged.modified_user_input = hr.modified_user_input
                 payload["user_input"] = hr.modified_user_input
+            if hr.modified_post_result is not None:
+                merged.modified_post_result = hr.modified_post_result
+                payload["result"] = hr.modified_post_result
         return merged
 
     @staticmethod

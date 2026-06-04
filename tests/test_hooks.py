@@ -135,6 +135,23 @@ async def test_modifications_stack():
     assert result.modified_user_input == "HELLO!"
 
 
+async def test_modified_post_result_propagates_via_payload():
+    """A PostToolUse hook can rewrite `payload['result']` for later hooks."""
+    reg = HookRegistry()
+    def first(p):
+        return HookResult(modified_post_result=p["result"] + "\n[reminder]")
+    seen = []
+    def second(p):
+        seen.append(p["result"])
+        return None
+    reg.register(HookEvent.POST_TOOL_USE, first, name="inject")
+    reg.register(HookEvent.POST_TOOL_USE, second, name="observe")
+    result = await reg.trigger(HookEvent.POST_TOOL_USE,
+                               {"tool": "x", "result": "original"})
+    assert seen == ["original\n[reminder]"]
+    assert result.modified_post_result == "original\n[reminder]"
+
+
 # ---------- Agent integration ----------
 
 def _agent(hooks: HookRegistry | None = None) -> Agent:
