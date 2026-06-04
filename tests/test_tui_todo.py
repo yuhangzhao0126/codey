@@ -5,7 +5,7 @@ from __future__ import annotations
 
 def test_tui_todo_writer_uses_dim_strike_on_completed():
     from codey.tools.todo_write import Todo
-    from codey.tui import _make_tui_todo_writer
+    from codey.ui.renderers import _make_tui_todo_writer
 
     captured = []
     writer = _make_tui_todo_writer(lambda line: captured.append(line))
@@ -22,7 +22,7 @@ def test_tui_todo_writer_uses_dim_strike_on_completed():
 
 
 def test_tui_todo_writer_empty_list_renders_cleared_header():
-    from codey.tui import _make_tui_todo_writer
+    from codey.ui.renderers import _make_tui_todo_writer
     captured = []
     writer = _make_tui_todo_writer(lambda line: captured.append(line))
     writer([])

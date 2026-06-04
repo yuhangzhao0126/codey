@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from codey.builtin_hooks.todo_nag import build_todo_nag_hooks
+from codey.hooks.builtin.todo_nag import build_todo_nag_hooks
 
 
 async def test_no_nag_below_threshold():

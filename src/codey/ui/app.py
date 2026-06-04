@@ -32,7 +32,7 @@ from textual.binding import Binding
 from textual.widgets import Footer, Header, Input, OptionList, RichLog
 from textual.worker import Worker
 
-from ..agent import Agent
+from ..core import Agent
 from ..config import ConfigFile
 from ..core.session import Session
 from ..hooks import HookRegistry

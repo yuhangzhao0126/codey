@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from codey.builtin_hooks.todo_render import todo_render_hook
+from codey.hooks.builtin.todo_render import todo_render_hook
 from codey.tools.todo_write import Todo, TodoWriteTool
 
 
@@ -47,7 +47,7 @@ def test_writer_errors_are_swallowed():
 
 
 def test_build_default_hooks_registers_todo_hooks():
-    from codey.builtin_hooks import build_default_hooks
+    from codey.hooks.builtin import build_default_hooks
     from codey.hooks import HookEvent
     from codey.permissions import PermissionEngine
 
@@ -70,7 +70,7 @@ def test_build_default_hooks_registers_todo_hooks():
 
 
 def test_build_default_hooks_omits_todo_hooks_without_tool():
-    from codey.builtin_hooks import build_default_hooks
+    from codey.hooks.builtin import build_default_hooks
     from codey.hooks import HookEvent
     from codey.permissions import PermissionEngine
 

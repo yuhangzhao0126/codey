@@ -24,7 +24,7 @@ from codey.tools.write_file import WriteFileTool
 def _run_perm_hook(engine, approve, tool: str, args: dict):
     """Invoke the permission hook directly, returning the HookResult."""
     import asyncio
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     hook = permission_check_hook(engine=engine, approve=approve)
     payload = {"tool": tool, "arguments": args, "call_id": "test"}
     result = asyncio.get_event_loop().run_until_complete(hook(payload)) \
@@ -46,7 +46,7 @@ async def test_read_file_returns_contents(tmp_path: Path):
 
 async def test_read_file_outside_workspace_asks(tmp_path: Path):
     """The permission hook must consult approve for an outside-workspace read."""
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     from codey.permissions import PermissionEngine, Mode
     inside = tmp_path / "ws"
     outside = tmp_path / "elsewhere"
@@ -72,7 +72,7 @@ async def test_read_file_outside_workspace_asks(tmp_path: Path):
 
 
 async def test_read_file_inside_workspace_skips_approval(tmp_path: Path):
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     from codey.permissions import PermissionEngine, Mode
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -90,7 +90,7 @@ async def test_read_file_inside_workspace_skips_approval(tmp_path: Path):
 
 
 async def test_read_file_yolo_bypasses_workspace(tmp_path: Path):
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     from codey.permissions import PermissionEngine, Mode
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -108,7 +108,7 @@ async def test_read_file_yolo_bypasses_workspace(tmp_path: Path):
 
 
 async def test_list_dir_outside_workspace_asks(tmp_path: Path):
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     from codey.permissions import PermissionEngine, Mode
     ws = tmp_path / "ws"
     other = tmp_path / "other"
@@ -126,7 +126,7 @@ async def test_list_dir_outside_workspace_asks(tmp_path: Path):
 
 
 async def test_grep_outside_workspace_asks(tmp_path: Path):
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     from codey.permissions import PermissionEngine, Mode
     ws = tmp_path / "ws"
     other = tmp_path / "other"

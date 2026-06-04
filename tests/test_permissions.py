@@ -362,7 +362,7 @@ def test_workspace_builtin_deny_still_wins(tmp_path: Path):
 # PreToolUse hook in codey.builtin_hooks.permission.)
 
 async def test_bash_uses_engine_for_deny():
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     eng = PermissionEngine(mode=Mode.SAFE)
     hook = permission_check_hook(engine=eng, approve=None)
     result = await hook({"tool": "bash",
@@ -373,7 +373,7 @@ async def test_bash_uses_engine_for_deny():
 
 
 async def test_bash_yolo_runs_unknown_command():
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     eng = PermissionEngine(mode=Mode.YOLO)
     hook = permission_check_hook(engine=eng, approve=None)
     result = await hook({"tool": "bash",
@@ -384,7 +384,7 @@ async def test_bash_yolo_runs_unknown_command():
 
 
 async def test_bash_safe_unknown_calls_approver():
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     from codey.permissions import Verdict
     eng = PermissionEngine(mode=Mode.SAFE)
     calls = []
@@ -404,7 +404,7 @@ async def test_bash_safe_unknown_calls_approver():
 
 
 async def test_bash_safe_allowlisted_skips_approver():
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     eng = PermissionEngine(mode=Mode.SAFE)
     calls = []
     def approve(ctx):
@@ -419,7 +419,7 @@ async def test_bash_safe_allowlisted_skips_approver():
 
 async def test_bash_remember_appends_user_rule(tmp_path: Path):
     """Verdict.remember should make the permission hook append a user rule."""
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     from codey.permissions import Verdict
     user_path = tmp_path / "perm.toml"
     eng = PermissionEngine.load(
@@ -453,7 +453,7 @@ async def test_bash_remember_appends_user_rule(tmp_path: Path):
 
 
 async def test_write_file_deny_via_project_rule():
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     eng = PermissionEngine(
         mode=Mode.SAFE,
         project_rules=[Rule("write_file", "/etc/*", "deny", "protected")],

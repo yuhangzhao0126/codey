@@ -95,7 +95,7 @@ def test_registered_in_default_registry():
 
 
 async def test_permission_hook_auto_allows_todo_write_in_all_modes():
-    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.hooks.builtin.permission import permission_check_hook
     from codey.permissions import Mode, PermissionEngine
     for mode in (Mode.PARANOID, Mode.READ_ONLY, Mode.SAFE, Mode.YOLO):
         eng = PermissionEngine(mode=mode)
@@ -109,7 +109,7 @@ async def test_permission_hook_auto_allows_todo_write_in_all_modes():
 
 
 async def test_agent_reset_clears_todo_list():
-    from codey.agent import Agent
+    from codey.core import Agent
     from codey.config import Profile
     from codey.tools import build_default_registry
 

@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from codey.agent import (
+from codey.core import (
     Agent,
     AssistantTextDelta,
     Message,
@@ -107,7 +107,7 @@ async def test_run_repairs_before_request(monkeypatch):
         # Snapshot the wire-format messages that would have been sent.
         seen_messages.append([m.to_wire() for m in self.history])
         yield AssistantTextDelta(text="ok")
-        from codey.agent import _RoundDone
+        from codey.core.turn import _RoundDone
         yield _RoundDone(tool_calls=[])
 
     monkeypatch.setattr(Agent, "_stream_one_round", fake_stream_one_round)

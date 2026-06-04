@@ -7,14 +7,14 @@ import asyncio
 import pytest
 from textual.widgets import Input
 
-from codey.agent import (
+from codey.core import (
     AssistantMessageCompleted,
     AssistantTextDelta,
     Message,
     TurnCompleted,
     TurnStarted,
 )
-from codey.tui import ApprovalScreen, CodeyApp, ProfilePickerScreen, SlashSuggest
+from codey.ui import ApprovalScreen, CodeyApp, ProfilePickerScreen, SlashSuggest
 
 pytestmark = pytest.mark.usefixtures("temp_config")
 
@@ -362,7 +362,7 @@ async def test_permission_status_shows_mode_and_counts():
 
 
 async def test_permission_bare_opens_mode_picker():
-    from codey.tui import ModePickerScreen
+    from codey.ui import ModePickerScreen
     app = CodeyApp(profile_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/permission")
@@ -379,7 +379,7 @@ async def test_permission_picker_switch_to_read_only(tmp_path, monkeypatch):
     monkeypatch.setattr(perms, "USER_PERMISSIONS_PATH", tmp_path / "permissions.toml")
     monkeypatch.setattr(perms, "PROJECT_PERMISSIONS_PATH", tmp_path / "_project.toml")
     from codey.permissions import Mode
-    from codey.tui import ModePickerScreen
+    from codey.ui import ModePickerScreen
     app = CodeyApp(profile_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/permission")

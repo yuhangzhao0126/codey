@@ -8,18 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from codey.agent import (
+from codey.core import (
     Agent,
     AssistantTextDelta,
     Message,
     ToolRegistry,
     TurnCompleted,
-    _RoundDone,
 )
-from codey.builtin_hooks.audit_log import audit_log_hook
-from codey.builtin_hooks.permission import permission_check_hook
-from codey.builtin_hooks.stop_logger import stop_logger_hook
-from codey.builtin_hooks.transcript import (
+from codey.core.turn import _RoundDone
+from codey.hooks.builtin.audit_log import audit_log_hook
+from codey.hooks.builtin.permission import permission_check_hook
+from codey.hooks.builtin.stop_logger import stop_logger_hook
+from codey.hooks.builtin.transcript import (
     post_tool_render_hook,
     pre_tool_render_hook,
 )
