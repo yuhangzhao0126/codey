@@ -34,8 +34,12 @@ class UISinks(Protocol):
 
     Defined as a Protocol so Session.build() doesn't import from ui/. The
     concrete bundle lives in codey.ui.renderers.UISinks.
+
+    `transcript_writer` is optional: None disables the per-call → / ←
+    transcript hook (quiet TUI mode); the audit log still records every
+    call regardless.
     """
-    transcript_writer: Callable[[str, str], None]
+    transcript_writer: Callable[[str, str], None] | None
     meta_writer:       Callable[[str], None]
     approve:           Callable[[dict], Awaitable[Any]]
     todo_writer:       Callable[[list], None] | None

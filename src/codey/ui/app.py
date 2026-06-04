@@ -7,10 +7,10 @@ Layout (geek-clear, minimal):
   ├────────────────────────────────────────────────────────────┤
   │                                                            │
   │   you  › what's the python version?                        │
-  │     → bash(command='python --version')                     │
-  │     ← bash [ok]   Python 3.14.5                            │
   │   codey› 3.14.5                                            │
   │                                                            │
+  │   (per-call → / ← tool lines are intentionally suppressed; │
+  │   `tail -f ~/.cache/codey/calls.jsonl` for the full trace) │
   │                                              (transcript)  │
   ├────────────────────────────────────────────────────────────┤
   │   ┌─────────────────────┐                                  │
@@ -133,11 +133,10 @@ class CodeyApp(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
-        # Build the default hook set wired to TUI sinks.
-        def transcript_writer(style: str, text: str) -> None:
-            color = {"tool": "yellow", "ok": "green", "err": "red"}.get(style, "white")
-            self.transcript.write(f"  [bold {color}]{text}[/]")
-
+        # Build the default hook set wired to TUI sinks. Per-call → / ←
+        # transcript lines are intentionally suppressed (transcript_writer
+        # left at None); use `tail -f ~/.cache/codey/calls.jsonl` to see
+        # them, or attach an OTel viewer.
         def meta_writer(text: str) -> None:
             self._log_meta(text)
 
@@ -146,7 +145,6 @@ class CodeyApp(App[None]):
         todo_writer = renderers.make_tui_todo_writer(todo_line_writer)
 
         sinks = UISinks(
-            transcript_writer=transcript_writer,
             meta_writer=meta_writer,
             approve=self._approve_tool,
             todo_writer=todo_writer,
@@ -372,12 +370,6 @@ class CodeyApp(App[None]):
 
     def _log_assistant(self, text: str) -> None:
         renderers.log_assistant(self.transcript, text)
-
-    def _log_tool_call(self, name: str, args: dict) -> None:
-        renderers.log_tool_call(self.transcript, name, args)
-
-    def _log_tool_result(self, name: str, ok: bool, content: str) -> None:
-        renderers.log_tool_result(self.transcript, name, ok, content)
 
     def _log_error(self, text: str) -> None:
         renderers.log_error(self.transcript, text)

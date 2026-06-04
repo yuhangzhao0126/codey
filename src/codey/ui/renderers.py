@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
+from rich.markdown import Markdown
 from rich.markup import escape as rich_escape
 
 if TYPE_CHECKING:
@@ -25,10 +26,14 @@ class UISinks:
 
     Session.build accepts this structurally (via codey.core.session.UISinks
     Protocol), so core/ doesn't need to import from ui/.
+
+    `transcript_writer=None` means the per-call → / ← lines are suppressed
+    (the default for the post-PR-C quiet TUI); the audit log still records
+    every call.
     """
-    transcript_writer: Callable[[str, str], None]   # (style, text) where style ∈ {"tool","ok","err"}
     meta_writer:       Callable[[str], None]
     approve:           Callable[[dict], Awaitable[Any]]
+    transcript_writer: Callable[[str, str], None] | None = None
     todo_writer:       Callable[[list], None] | None = None
 
 
@@ -43,19 +48,19 @@ def log_user(transcript: "RichLog", text: str) -> None:
 
 
 def log_assistant(transcript: "RichLog", text: str) -> None:
-    transcript.write(f"[bold magenta]codey›[/] {text}")
+    """Render an assistant reply.
 
-
-def log_tool_call(transcript: "RichLog", name: str, args: dict) -> None:
-    rendered_args = ", ".join(f"{k}={v!r}" for k, v in args.items())
-    transcript.write(f"  [bold yellow]→ {name}[/]([dim]{rendered_args}[/])")
-
-
-def log_tool_result(transcript: "RichLog", name: str, ok: bool, content: str) -> None:
-    tag_color = "green" if ok else "red"
-    tag = "ok" if ok else "err"
-    body = "\n".join(f"    [dim]{line}[/]" for line in content.splitlines() or [""])
-    transcript.write(f"  [bold {tag_color}]← {name} [{tag}][/]\n{body}")
+    Writes the `codey›` prefix as one Rich-markup line, then renders the
+    reply body as Markdown (headers, lists, fenced code blocks with
+    Pygments highlighting, etc.). On any rendering failure (exotic
+    Pygments lexer, etc.) fall back to writing the raw text so the user
+    always sees something.
+    """
+    transcript.write("[bold magenta]codey›[/]")
+    try:
+        transcript.write(Markdown(text))
+    except Exception:  # noqa: BLE001
+        transcript.write(text)
 
 
 def log_error(transcript: "RichLog", text: str) -> None:

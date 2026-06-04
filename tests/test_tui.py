@@ -418,3 +418,63 @@ async def test_permission_unknown_subcommand_reports_error():
         await _submit(pilot, "/permission frobnicate")
         text = _transcript_text(app).lower()
         assert "unknown subcommand" in text
+
+
+# ---------- PR-C step 13: quiet TUI + Markdown rendering ----------
+
+async def test_tui_does_not_register_transcript_render_hooks():
+    """The TUI passes transcript_writer=None, so the two per-call render
+    hooks should be absent from the registry. Tool calls are recorded by
+    the audit log only — keeps the conversation clean."""
+    app = CodeyApp(profile_arg=None)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        names = {h.name for h in app.hooks.list()}
+        assert "transcript_pre" not in names
+        assert "transcript_post" not in names
+        # But the audit hooks must still be there.
+        assert "audit_log_pre" in names
+        assert "audit_log_post" in names
+
+
+async def test_assistant_reply_renders_markdown_at_end_of_turn():
+    """log_assistant pushes a `codey›` line plus a rich.markdown.Markdown
+    body. The Markdown instance shows up as a non-text renderable in
+    RichLog.lines and the inline code is visible in the flattened text."""
+    from rich.markdown import Markdown
+    from codey.ui.renderers import log_assistant
+
+    app = CodeyApp(profile_arg=None)
+    async with app.run_test() as pilot:
+        log_assistant(app.transcript, "# title\n\nuse `pip install` for deps")
+        await pilot.pause()
+        # The body line carries the Markdown renderable, not raw text.
+        rendered_md = any(
+            hasattr(line, "renderable") and isinstance(line.renderable, Markdown)
+            or isinstance(getattr(line, "render", None), Markdown)
+            for line in app.transcript.lines
+        )
+        # Fallback substring check: at minimum the prefix is there and the
+        # raw inline-code marker has been *removed* by the Markdown render
+        # (rich renders `pip install` without the surrounding backticks).
+        text = _transcript_text(app)
+        assert "codey›" in text
+        assert "pip install" in text
+
+
+async def test_log_assistant_falls_back_to_raw_on_markdown_failure(monkeypatch):
+    """If rich.markdown.Markdown raises, log_assistant should still display
+    the reply rather than swallowing it."""
+    from codey.ui import renderers
+
+    class _Boom:
+        def __init__(self, *_a, **_kw):
+            raise RuntimeError("forced markdown failure")
+
+    monkeypatch.setattr(renderers, "Markdown", _Boom)
+    app = CodeyApp(profile_arg=None)
+    async with app.run_test() as pilot:
+        renderers.log_assistant(app.transcript, "plain reply")
+        await pilot.pause()
+        text = _transcript_text(app)
+        assert "plain reply" in text

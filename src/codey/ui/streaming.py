@@ -34,15 +34,13 @@ async def stream_turn(app: "CodeyApp", user_input: str) -> None:
         elif isinstance(ev, AssistantTextDelta):
             app._assistant_buf += ev.text
         elif isinstance(ev, ToolCallRequested):
-            # Flush accumulated assistant text before the transcript hook
-            # prints the tool call line.
+            # Flush any accumulated assistant text before the tool call
+            # happens. Tool calls are invisible in the TUI by design (see
+            # PR-C); the audit log records them.
             if app._assistant_buf.strip():
                 log_assistant(app.transcript, app._assistant_buf.strip())
                 app._assistant_buf = ""
-            # The transcript hook (registered in on_mount) prints the
-            # → tool(...) line.
         elif isinstance(ev, ToolResult):
-            # Hook prints the ← line; nothing to do here.
             pass
         elif isinstance(ev, AssistantMessageCompleted):
             app._assistant_buf = ev.text

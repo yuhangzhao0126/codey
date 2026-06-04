@@ -32,7 +32,7 @@ def build_default_hooks(
     *,
     engine: PermissionEngine,
     approve: ApproveFn | None,
-    transcript_writer: TranscriptWriter,
+    transcript_writer: TranscriptWriter | None,
     meta_writer: MetaWriter,
     audit_log_path: Path | None = None,
     todo_tool: TodoWriteTool | None = None,
@@ -47,17 +47,21 @@ def build_default_hooks(
                  permission_check_hook(engine=engine, approve=approve),
                  name="permission")
 
-    reg.register(HookEvent.PRE_TOOL_USE,
-                 pre_tool_render_hook(transcript_writer),
-                 name="transcript_pre")
+    # Per-call → / ← transcript lines are opt-in. Hosts that want a quiet
+    # transcript (the TUI, post-PR-C) pass transcript_writer=None and rely
+    # on the audit log instead.
+    if transcript_writer is not None:
+        reg.register(HookEvent.PRE_TOOL_USE,
+                     pre_tool_render_hook(transcript_writer),
+                     name="transcript_pre")
+        reg.register(HookEvent.POST_TOOL_USE,
+                     post_tool_render_hook(transcript_writer),
+                     name="transcript_post")
+
     reg.register(HookEvent.PRE_TOOL_USE,
                  audit_log_hook("PreToolUse", log_path=audit_log_path,
                                 session_id=session_id),
                  name="audit_log_pre")
-
-    reg.register(HookEvent.POST_TOOL_USE,
-                 post_tool_render_hook(transcript_writer),
-                 name="transcript_post")
     reg.register(HookEvent.POST_TOOL_USE,
                  audit_log_hook("PostToolUse", log_path=audit_log_path,
                                 session_id=session_id),
