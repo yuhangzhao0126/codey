@@ -8,12 +8,28 @@ reference.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from rich.markup import escape as rich_escape
 
 if TYPE_CHECKING:
     from textual.widgets import RichLog
+
+
+# ---------- UI-supplied sinks consumed by Session.build() ----------
+
+@dataclass
+class UISinks:
+    """Concrete bundle of the writers + approver Session.build() needs.
+
+    Session.build accepts this structurally (via codey.core.session.UISinks
+    Protocol), so core/ doesn't need to import from ui/.
+    """
+    transcript_writer: Callable[[str, str], None]   # (style, text) where style ∈ {"tool","ok","err"}
+    meta_writer:       Callable[[str], None]
+    approve:           Callable[[dict], Awaitable[Any]]
+    todo_writer:       Callable[[list], None] | None = None
 
 
 # ---------- per-line rendering helpers ----------

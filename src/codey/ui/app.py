@@ -34,6 +34,7 @@ from textual.worker import Worker
 
 from ..agent import Agent
 from ..config import ConfigFile
+from ..core.session import Session
 from ..hooks import HookRegistry
 from ..hooks.builtin import build_default_hooks
 from ..permissions import MODE_DESCRIPTIONS, Mode, PermissionEngine, Verdict
@@ -44,6 +45,7 @@ from .modals.approval import ApprovalScreen
 from .modals.mode_picker import ModePickerScreen
 from .modals.profile_picker import ProfilePickerScreen
 from .modals.remember import RememberScreen
+from .renderers import UISinks
 from .slash_commands import SlashCommand, build_slash_commands, handle_slash
 from .slash_suggest import SlashSuggest
 
@@ -90,14 +92,35 @@ class CodeyApp(App[None]):
     def __init__(self, profile_arg: str | None) -> None:
         super().__init__()
         self.profile_arg = profile_arg
-        self.cfg = ConfigFile.load()
-        self.workspace = Path.cwd().resolve()
-        self.engine: PermissionEngine = PermissionEngine.load(workspace=self.workspace)
-        self.agent: Agent  # set in on_mount
+        self.session: Session  # set in on_mount
         self._busy = False
         self._turn_worker: Worker | None = None  # current in-flight model turn
         self._assistant_buf = ""
         self.slash_commands: dict[str, SlashCommand] = build_slash_commands()
+
+    # -- back-compat property proxies onto Session --
+    # Several tests (and slash-command handlers) read these directly off the
+    # app object. Forward to self.session so the names keep working.
+
+    @property
+    def agent(self) -> Agent:
+        return self.session.agent
+
+    @property
+    def engine(self) -> PermissionEngine:
+        return self.session.engine
+
+    @property
+    def hooks(self) -> HookRegistry:
+        return self.session.hooks
+
+    @property
+    def cfg(self) -> ConfigFile:
+        return self.session.cfg
+
+    @property
+    def workspace(self):
+        return self.session.workspace
 
     IDLE_PLACEHOLDER = "message codey — / for commands"
     BUSY_PLACEHOLDER = "codey is working… (esc to cancel)"
@@ -110,8 +133,6 @@ class CodeyApp(App[None]):
         yield Footer()
 
     async def on_mount(self) -> None:
-        profile = self.cfg.resolve(self.profile_arg)
-
         # Build the default hook set wired to TUI sinks.
         def transcript_writer(style: str, text: str) -> None:
             color = {"tool": "yellow", "ok": "green", "err": "red"}.get(style, "white")
@@ -120,28 +141,21 @@ class CodeyApp(App[None]):
         def meta_writer(text: str) -> None:
             self._log_meta(text)
 
-        tool_registry = build_default_registry()
-        todo_tool = tool_registry.tools.get("todo_write")
-
         def todo_line_writer(text: str) -> None:
             self.transcript.write(text)
-        todo_writer = renderers.make_tui_todo_writer(todo_line_writer) if todo_tool is not None else None
+        todo_writer = renderers.make_tui_todo_writer(todo_line_writer)
 
-        self.hooks = build_default_hooks(
-            engine=self.engine,
-            approve=self._approve_tool,
+        sinks = UISinks(
             transcript_writer=transcript_writer,
             meta_writer=meta_writer,
-            todo_tool=todo_tool,
+            approve=self._approve_tool,
             todo_writer=todo_writer,
         )
-
-        self.agent = Agent(
-            profile=profile,
-            system_prompt=build_system_prompt(),
-            tools=tool_registry,
-            hooks=self.hooks,
+        self.session = Session.build(
+            profile_arg=self.profile_arg,
+            ui_sinks=sinks,
         )
+
         self._refresh_title()
         self._log_meta("codey ready · type / for commands · ctrl+c to quit")
         self._log_meta(f"workspace: {self.workspace}")
@@ -150,8 +164,8 @@ class CodeyApp(App[None]):
         self.query_one(Input).focus()
 
     async def on_unmount(self) -> None:
-        if hasattr(self, "agent"):
-            await self.agent.aclose()
+        if hasattr(self, "session"):
+            await self.session.aclose()
 
     # -- approval hook handed to all permission-gated tools --
 
@@ -326,11 +340,10 @@ class CodeyApp(App[None]):
 
     async def _switch_profile(self, name: str) -> None:
         try:
-            new_profile = self.cfg.resolve(name)
+            new_profile = await self.session.swap_profile(name)
         except RuntimeError as e:
             self._log_error(str(e))
             return
-        await self.agent.swap_profile(new_profile)
         self._refresh_title()
         self._log_meta(f"(switched to {new_profile.name}: {new_profile.model})")
 
