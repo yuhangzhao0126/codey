@@ -173,6 +173,8 @@ BUILTIN_ALLOW: list[Rule] = [
     Rule("bash", "git branch*",  "allow", "", "builtin"),
     Rule("bash", "git remote*",  "allow", "", "builtin"),
     Rule("bash", "git config*",  "allow", "", "builtin"),
+    # in-memory state — no filesystem / shell access
+    Rule("todo_write", "*",      "allow", "in-memory task list", "builtin"),
 ]
 
 
@@ -252,6 +254,12 @@ class PermissionEngine:
         # 1. built-in deny
         if hit := _first_match(BUILTIN_DENY, tool, arg_str):
             return Deny(reason=hit.reason or "denied by built-in rule", rule=hit)
+
+        # Built-in tool with no filesystem / shell impact — always allow,
+        # before any mode shortcut. Keeps planning calls invisible to the
+        # user even in paranoid mode.
+        if tool == "todo_write":
+            return Allow(reason="in-memory task list")
 
         # 2. mode shortcuts that bypass user rules
         if self.mode == Mode.YOLO:

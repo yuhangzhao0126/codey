@@ -377,7 +377,7 @@ async def test_default_registry_contains_all_tools():
     from codey.tools import build_default_registry
     reg = build_default_registry()
     names = set(reg.tools)
-    assert names == {"bash", "read_file", "list_dir", "grep", "write_file", "apply_edit"}
+    assert names == {"bash", "read_file", "list_dir", "grep", "write_file", "apply_edit", "todo_write"}
     # Each tool has a non-empty schema.
     for schema in reg.schemas():
         assert schema["function"]["name"]

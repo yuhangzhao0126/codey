@@ -85,3 +85,24 @@ async def test_schema_shape():
     assert set(item_schema["properties"]["status"]["enum"]) == {
         "pending", "in_progress", "completed",
     }
+
+
+def test_registered_in_default_registry():
+    from codey.tools import build_default_registry
+    reg = build_default_registry()
+    assert "todo_write" in reg.tools
+    assert isinstance(reg.tools["todo_write"], TodoWriteTool)
+
+
+async def test_permission_hook_auto_allows_todo_write_in_all_modes():
+    from codey.builtin_hooks.permission import permission_check_hook
+    from codey.permissions import Mode, PermissionEngine
+    for mode in (Mode.PARANOID, Mode.READ_ONLY, Mode.SAFE, Mode.YOLO):
+        eng = PermissionEngine(mode=mode)
+        hook = permission_check_hook(engine=eng, approve=None)
+        result = await hook({
+            "tool": "todo_write",
+            "arguments": {"todos": []},
+            "call_id": "x",
+        })
+        assert result is None, f"expected auto-allow in {mode.value}, got {result}"

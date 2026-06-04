@@ -13,6 +13,7 @@ from .bash import ApproveFn, BashTool, Verdict
 from .grep import GrepTool
 from .list_dir import ListDirTool
 from .read_file import ReadFileTool
+from .todo_write import TodoWriteTool
 from .write_file import WriteFileTool
 
 
@@ -25,6 +26,7 @@ def build_default_registry() -> ToolRegistry:
     reg.register(GrepTool())
     reg.register(WriteFileTool())
     reg.register(ApplyEditTool())
+    reg.register(TodoWriteTool())
     return reg
 
 
@@ -36,6 +38,7 @@ __all__ = [
     "GrepTool",
     "ListDirTool",
     "ReadFileTool",
+    "TodoWriteTool",
     "Verdict",
     "WriteFileTool",
 ]
