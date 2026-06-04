@@ -351,8 +351,13 @@ class Agent:
             break
 
     def reset(self) -> None:
-        """Clear chat history, keeping the system message."""
+        """Clear chat history, keeping the system message. Also clears any
+        per-session tool state that survives outside of history — currently
+        just the todo_write task list."""
         self.history = [m for m in self.history if m.role == "system"]
+        todo_tool = self.tools.tools.get("todo_write")
+        if todo_tool is not None and hasattr(todo_tool, "todos"):
+            todo_tool.todos = []
 
     async def swap_profile(self, profile: Profile) -> None:
         """Switch provider/model live. Keeps chat history; closes the old client.

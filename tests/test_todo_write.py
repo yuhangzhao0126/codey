@@ -106,3 +106,22 @@ async def test_permission_hook_auto_allows_todo_write_in_all_modes():
             "call_id": "x",
         })
         assert result is None, f"expected auto-allow in {mode.value}, got {result}"
+
+
+async def test_agent_reset_clears_todo_list():
+    from codey.agent import Agent
+    from codey.config import Profile
+    from codey.tools import build_default_registry
+
+    reg = build_default_registry()
+    todo_tool = reg.tools["todo_write"]
+    await todo_tool.run({"todos": [{"content": "x", "status": "pending"}]})
+    assert todo_tool.todos
+
+    agent = Agent(
+        profile=Profile(name="t", api_key="sk", base_url="http://x/v1", model="m"),
+        system_prompt="",
+        tools=reg,
+    )
+    agent.reset()
+    assert todo_tool.todos == []
