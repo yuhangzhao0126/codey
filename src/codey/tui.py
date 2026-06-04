@@ -866,3 +866,14 @@ class CodeyApp(App[None]):
 def run(profile_arg: str | None) -> None:
     app = CodeyApp(profile_arg=profile_arg)
     app.run()
+
+
+def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(prog="codey", description="codey — a coding agent")
+    parser.add_argument(
+        "--profile", "-p",
+        help="profile name from ~/.config/codey/config.toml (overrides $CODEY_PROFILE)",
+    )
+    args = parser.parse_args()
+    run(args.profile)

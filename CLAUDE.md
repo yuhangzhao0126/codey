@@ -15,10 +15,10 @@ wins** — update this file in the same commit.
 ## What this project is
 
 A terminal coding agent. Talks to any OpenAI-compatible API. Runs local tools
-(bash, file read/write/grep, in-place edits) with a permission system. Two
-front-ends: a `prompt_toolkit` line REPL (`codey`) and a Textual full-screen
-TUI (`codey --tui`). Built as a learning project — small enough to read
-end-to-end, big enough to be useful for day-to-day coding tasks.
+(bash, file read/write/grep, in-place edits) with a permission system. Single
+front-end: a Textual full-screen TUI (`codey`). Built as a learning project —
+small enough to read end-to-end, big enough to be useful for day-to-day
+coding tasks.
 
 Public surface for users is documented in `README.md`.
 
@@ -29,8 +29,7 @@ Public surface for users is documented in `README.md`.
 ```bash
 uv sync                    # install deps into .venv
 uv run pytest              # run the test suite (must stay green)
-uv run codey               # REPL
-uv run codey --tui         # Textual TUI
+uv run codey               # Textual TUI
 uv run codey -p deepseek   # pick a profile from ~/.config/codey/config.toml
 ```
 
@@ -66,7 +65,6 @@ src/codey/
   config.py         # Profile loading from ~/.config/codey/config.toml
   prompt.py         # 3-layer system prompt: package default → user
                     # → ./codey.md (this file)
-  cli.py            # prompt_toolkit REPL + slash commands
   tui.py            # Textual full-screen UI + slash commands + modals
   prompts/system.md # default system prompt (always loaded)
 ```
@@ -103,7 +101,7 @@ render (transcript hook does this) via UI-supplied writers.
 ## House rules (read before writing code)
 
 ### Don't break the test suite
-`uv run pytest` is **the** verification. ~126 tests, runs in ~5 s. If you
+`uv run pytest` is **the** verification. ~153 tests, runs in ~5 s. If you
 break it, fix it before committing. New behavior gets a new test.
 
 ### Tools are pure
@@ -158,10 +156,6 @@ flushes on `ToolCallRequested` / `TurnCompleted`. If you change how text
 gets rendered, preserve this batching — otherwise tool calls interleave
 with mid-sentence assistant text and the transcript becomes unreadable.
 
-### Lazy imports for heavy deps
-`tui.py` is imported lazily in `cli.main()` only when `--tui` is passed.
-Don't add top-level imports that pull in Textual from the REPL path.
-
 ### Don't write Markdown docs unless asked
 This project has README.md and CLAUDE.md and that's the only documentation
 that should exist. Don't create plan / design / summary files.
@@ -185,9 +179,9 @@ that should exist. Don't create plan / design / summary files.
 | A new tool | `src/codey/tools/<name>.py` + register in `tools/__init__.py` |
 | A new hook (observe/decide/rewrite at a known point) | `src/codey/builtin_hooks/<name>.py` + register in `builtin_hooks/__init__.py` |
 | A new built-in permission rule | `BUILTIN_DENY` or `BUILTIN_ALLOW` in `permissions.py` |
-| A new slash command | Same file as the others: `cli.py:_build_commands()` and `tui.py:_build_slash_commands()` (keep both in sync) |
+| A new slash command | `tui.py:_build_slash_commands()` |
 | A new test | `tests/test_<area>.py`, async-style, using existing fixtures in `tests/conftest.py` |
-| New CLI flag | `cli.py:main()` argparse + thread through to `_run` |
+| New CLI flag | `tui.py:main()` argparse + thread through to `run()` |
 
 ## Things NOT to do
 

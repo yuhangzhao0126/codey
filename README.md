@@ -2,7 +2,7 @@
 
 A minimal terminal-based coding agent. Talks to any OpenAI-compatible API,
 runs tools on your machine (shell, file read/write/search, in-place edits),
-and works in either a line-based REPL or a Textual full-screen UI.
+in a Textual full-screen UI.
 
 Built as a learning project — small enough to read end-to-end (~1.5k LOC),
 big enough to be genuinely useful for day-to-day coding tasks.
@@ -77,19 +77,12 @@ Each profile is a self-contained `(base_url, api_key, model)` bundle.
 
 ## Run
 
-### REPL (default)
 ```bash
 uv run codey                       # use default_profile
 uv run codey -p deepseek           # pick a profile for this run
 ```
 
-### TUI
-```bash
-uv run codey --tui
-uv run codey --tui -p deepseek
-```
-
-### Slash commands (work in both modes)
+### Slash commands
 
 | Command           | Description                                                            |
 |-------------------|------------------------------------------------------------------------|
@@ -104,7 +97,7 @@ uv run codey --tui -p deepseek
 Commands are **searchable** — type `/pro` to see a dropdown of matches; pick
 one with ↑/↓ + Enter.
 
-### Hotkeys (TUI only)
+### Hotkeys
 
 | Key       | Action                                       |
 |-----------|----------------------------------------------|
@@ -145,7 +138,6 @@ src/codey/
   agent.py       # core agent loop: streaming, tool dispatch, multi-round, cancellation
   config.py      # profile loading from ~/.config/codey/config.toml
   prompt.py      # 3-layer system prompt assembly
-  cli.py         # prompt_toolkit line REPL
   tui.py         # Textual full-screen UI
   prompts/
     system.md    # default system prompt
@@ -166,7 +158,7 @@ tests/           # pytest + Textual Pilot integration tests
 uv run pytest
 ```
 
-47 tests across the agent, tools, and TUI. The TUI tests run headlessly via
+153 tests across the agent, tools, and TUI. The TUI tests run headlessly via
 Textual's `Pilot` — no real terminal needed.
 
 ## License
