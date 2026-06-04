@@ -30,88 +30,18 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Protocol
 from openai import AsyncOpenAI, OpenAIError
 
 from .config import Profile
-from .hooks import HookEvent, HookRegistry
-
-
-# ---------- message schema ----------
-
-Role = Literal["system", "user", "assistant", "tool"]
-
-
-@dataclass
-class Message:
-    role: Role
-    content: str = ""
-    # Assistant turns that requested tool use carry tool_calls.
-    tool_calls: list[dict[str, Any]] | None = None
-    # Tool result turns reference the originating call.
-    tool_call_id: str | None = None
-    name: str | None = None  # for tool messages: tool name
-
-    def to_wire(self) -> dict[str, Any]:
-        """Serialize to the OpenAI chat-completions wire format."""
-        msg: dict[str, Any] = {"role": self.role, "content": self.content}
-        if self.tool_calls is not None:
-            msg["tool_calls"] = self.tool_calls
-        if self.tool_call_id is not None:
-            msg["tool_call_id"] = self.tool_call_id
-        if self.name is not None:
-            msg["name"] = self.name
-        return msg
-
-
-# ---------- events emitted by run() ----------
-
-@dataclass
-class TurnStarted:
-    pass
-
-
-@dataclass
-class RoundStarted:
-    round: int  # 0-indexed
-
-
-@dataclass
-class AssistantTextDelta:
-    text: str
-
-
-@dataclass
-class AssistantMessageCompleted:
-    text: str  # full assistant text for the turn (concatenated across rounds)
-
-
-@dataclass
-class ToolCallRequested:
-    id: str
-    name: str
-    arguments: dict[str, Any]
-
-
-@dataclass
-class ToolResult:
-    id: str
-    name: str
-    ok: bool
-    content: str
-
-
-@dataclass
-class TurnCompleted:
-    reason: Literal["stop", "error", "cancelled"]
-    error: str | None = None
-
-
-Event = (
-    TurnStarted
-    | RoundStarted
-    | AssistantTextDelta
-    | AssistantMessageCompleted
-    | ToolCallRequested
-    | ToolResult
-    | TurnCompleted
+from .core.events import (
+    AssistantMessageCompleted,
+    AssistantTextDelta,
+    Event,
+    RoundStarted,
+    ToolCallRequested,
+    ToolResult,
+    TurnCompleted,
+    TurnStarted,
 )
+from .core.messages import Message, Role
+from .hooks import HookEvent, HookRegistry
 
 
 # ---------- tool registry (stubbed; real tools land in a later commit) ----------
