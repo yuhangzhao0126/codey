@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-codey = "codey.tui:main"
+codey = "codey.app:main"
 
 [build-system]
 requires = ["hatchling"]
