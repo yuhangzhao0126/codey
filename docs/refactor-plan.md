@@ -1,7 +1,7 @@
 # codey refactor plan — TUI-only + structural cleanup
 
-**Status:** proposal, awaiting review
-**Author:** drafted by Claude (Opus 4) on 2026-06-04
+**Status:** reviewed, decisions resolved
+**Author:** drafted by Claude (Opus 4) on 2026-06-04, decisions resolved 2026-06-04
 **Constraint:** no behavior change. Only structure, names, and file boundaries move.
 
 This plan does two things in one coordinated pass:
@@ -28,7 +28,7 @@ permissions — that's good and worth preserving. The remaining problems are:
 | `src/codey/agent.py` | 442 | Mixes 5 concerns (message schema, event types, the turn loop, history repair, the streaming reassembler). `run()` is a 130-line procedure. |
 | `src/codey/permissions.py` | 454 | Mixes the decision engine, the rule dataclasses + built-in lists, TOML I/O, and a pattern-suggestion helper. |
 | Wiring duplication | — | `ConfigFile → Profile → PermissionEngine → ToolRegistry → build_default_hooks → Agent` is wired by hand in both `cli._run()` and `CodeyApp.on_mount`. Adding a new piece means editing both. |
-| Top-level grouping | — | `agent.py`, `permissions.py`, `prompt.py`, `config.py`, `hooks.py`, `builtin_hooks/`, `tools/`, `prompts/`, `cli.py`, `tui.py` all sit at the same level. The conceptual layers (core / policy / capabilities / observers / UI) aren't visible in the tree. |
+| Top-level grouping | — | `agent.py`, `permissions.py`, `prompt.py`, `config.py`, `hooks.py`, `builtin_hooks/`, `tools/`, `prompts/`, `cli.py`, `tui.py` all sit at the same level. The conceptual layers (core / permissions / capabilities / observers / UI) aren't visible in the tree. |
 
 Reference points considered:
 
@@ -36,7 +36,7 @@ Reference points considered:
   object as the single host-facing handle. We adopt both.
 - **codex** (the Rust one) separates the provider client, the session state,
   and the UI into distinct crates. We do the *folder* equivalent (`core/`,
-  `policy/`, `ui/`) without introducing a provider abstraction (out of scope).
+  `permissions/`, `ui/`) without introducing a provider abstraction (out of scope).
 - **aider** keeps a `Coder` object that bundles model + tools + IO + history,
   similar to our proposed `Session`.
 
@@ -64,7 +64,7 @@ src/codey/
                            # HookRegistry, ToolRegistry, ConfigFile, workspace).
                            # One handle the UI talks to.
 
-  policy/                  # "what is the agent allowed to do"
+  permissions/             # "what is the agent allowed to do"
     __init__.py            # re-exports Mode, Rule, Allow/Deny/Ask, Verdict, PermissionEngine,
                            # suggest_pattern, MODE_DESCRIPTIONS
     rules.py               # Mode enum, Rule, Action, Allow/Deny/Ask, Decision, Verdict,
@@ -127,7 +127,7 @@ src/codey/
 **Top-level groupings** become five layers, visible in the tree:
 
 - `core/` — agent loop, message/event types, session bundle
-- `policy/` — permission rules, engine, persistence
+- `permissions/` — permission rules, engine, persistence
 - `tools/` — pure capability functions (unchanged)
 - `hooks/` — observers/decision points + the four built-in hooks
 - `ui/` — Textual app, modals, slash commands, rendering
@@ -287,13 +287,13 @@ alive for one cycle, then is removed in step 10.
 
 | New file | Contents |
 |---|---|
-| `policy/rules.py` | `Mode` enum, `MODE_DESCRIPTIONS`, `Action` literal, `Rule`, `Allow`, `Deny`, `Ask`, `Decision`, `Verdict`, `READER_TOOLS`, `WRITER_TOOLS`, `PATH_TOOLS`, `BUILTIN_DENY`, `BUILTIN_ALLOW` |
-| `policy/engine.py` | `PermissionEngine` class, `check()`, `_inside_workspace()`, the `_match`/`_first_match`/`_denies`/`_allows`/`_asks`/`_expand_for_path_tool` private helpers |
-| `policy/io.py` | `USER_PERMISSIONS_PATH`, `PROJECT_PERMISSIONS_PATH`, `_load_file`, `_write_file`, `_toml_escape` |
-| `policy/suggest.py` | `suggest_pattern()` |
+| `permissions/rules.py` | `Mode` enum, `MODE_DESCRIPTIONS`, `Action` literal, `Rule`, `Allow`, `Deny`, `Ask`, `Decision`, `Verdict`, `READER_TOOLS`, `WRITER_TOOLS`, `PATH_TOOLS`, `BUILTIN_DENY`, `BUILTIN_ALLOW` |
+| `permissions/engine.py` | `PermissionEngine` class, `check()`, `_inside_workspace()`, the `_match`/`_first_match`/`_denies`/`_allows`/`_asks`/`_expand_for_path_tool` private helpers |
+| `permissions/io.py` | `USER_PERMISSIONS_PATH`, `PROJECT_PERMISSIONS_PATH`, `_load_file`, `_write_file`, `_toml_escape` |
+| `permissions/suggest.py` | `suggest_pattern()` |
 
-`policy/__init__.py` re-exports the public surface so call sites do
-`from codey.policy import Mode, PermissionEngine, Rule, Verdict, suggest_pattern, MODE_DESCRIPTIONS`.
+`permissions/__init__.py` re-exports the public surface so call sites do
+`from codey.permissions import Mode, PermissionEngine, Rule, Verdict, suggest_pattern, MODE_DESCRIPTIONS`.
 
 ---
 
@@ -363,9 +363,15 @@ So `python -m codey` works in addition to the installed `codey` script.
 
 ## 9. Migration sequence (each step keeps `uv run pytest` green)
 
-Order is chosen so each step is small, locally testable, and reversible.
+Order is chosen so each step is small, locally testable, and reversible. Ships as **two PRs** to keep blast radius per merge small.
 
-1. **Delete the CLI.** Remove `cli.py` + `tests/test_cli_todo.py`. Drop `prompt-toolkit` from `pyproject.toml`. Change the console script to `codey = "codey.tui:run_main"` temporarily (or keep `codey = "codey.tui:main"` if we add a small `main()` wrapper in tui.py for this interim step). Update README + CLAUDE.md. **Gate:** ~124 tests pass.
+### PR-A — CLI deletion (1 commit, low risk)
+
+1. **Delete the CLI.** Remove `src/codey/cli.py` and `tests/test_cli_todo.py`. Drop `prompt-toolkit` from `pyproject.toml`. Add a small `main()` wrapper inside `tui.py` (parses `-p/--profile`, calls `run(args.profile)`) and change the console script to `codey = "codey.tui:main"`. Update README to remove the REPL section, the `--tui` flag, and the two-mode table caption; update CLAUDE.md to remove `--tui` references and the cli.py row. **Gate:** ~124 tests pass.
+
+Self-contained and reversible. Merge before starting PR-B.
+
+### PR-B — Restructure (10 commits)
 
 2. **Lift `events` + `messages` out of `agent.py`** into `core/events.py` and `core/messages.py`. Add re-exports in `agent.py`. **Gate:** green.
 
@@ -373,7 +379,7 @@ Order is chosen so each step is small, locally testable, and reversible.
 
 4. **Move `agent.py` → `core/agent.py` + `core/turn.py`** with a top-level `src/codey/agent.py` shim that re-exports. **Gate:** green.
 
-5. **Split `permissions.py` → `policy/`** with the 4-file breakdown. Add `src/codey/permissions.py` shim re-exporting from `codey.policy`. **Gate:** green (no test imports change yet).
+5. **Split `permissions.py` → `permissions/` package.** Because the new package name collides with the old module name, do this as one commit: (a) delete `src/codey/permissions.py`, (b) create `src/codey/permissions/` with `__init__.py` + `rules.py` + `engine.py` + `io.py` + `suggest.py`. The package's `__init__.py` re-exports the same public names the old module exposed, so every `from codey.permissions import …` call site (including all tests) keeps working unchanged. **Gate:** green.
 
 6. **Move `hooks.py` + `builtin_hooks/` → `hooks/registry.py` + `hooks/builtin/`** with shims at the old paths. **Gate:** green.
 
@@ -381,15 +387,13 @@ Order is chosen so each step is small, locally testable, and reversible.
 
 8. **Introduce `Session`.** Add `core/session.py`. Rewrite `CodeyApp.on_mount` to call `Session.build(...)`. Migrate `swap_profile` calls through `Session`. Slash-command handlers read from `self.session.engine` / `.cfg` / `.agent`. **Gate:** green.
 
-9. **Create `src/codey/app.py` + `__main__.py`.** Update `pyproject.toml` console script to `codey = "codey.app:main"`. **Gate:** green.
+9. **Create `src/codey/app.py` + `__main__.py`.** Update `pyproject.toml` console script to `codey = "codey.app:main"`. `__main__.py` calls `app.main()` so `python -m codey` also works. **Gate:** green.
 
-10. **Remove back-compat shims** from steps 4, 5, 6. Grep for `from codey.permissions`, `from codey.agent`, `from codey.hooks` (without subpath), `from codey.builtin_hooks` outside the new façades and rewrite. **Gate:** green.
+10. **Remove back-compat shims** from steps 4 and 6 (step 5 has no shim — the package's `__init__.py` IS the compatibility layer and stays). Grep for `from codey.agent`, `from codey.hooks` (without subpath), `from codey.builtin_hooks` outside the new façades and rewrite. **Gate:** green.
 
-11. **Final docs pass.** Update CLAUDE.md "Where things go" table, the
-    architecture diagram comment in `core/turn.py`, and the README project
-    layout block to match the final tree. Commit.
+11. **Final docs pass.** Update CLAUDE.md "Where things go" table, the architecture diagram comment in `core/turn.py`, and the README project layout block to match the final tree. Commit.
 
-Each step is one commit. The series is bisectable.
+Each step is one commit. Both PRs are bisectable.
 
 ---
 
@@ -401,11 +405,11 @@ Existing test files and what changes in each:
 |---|---|
 | `tests/test_agent_recovery.py` | imports stay (`from codey.agent import …`) thanks to step-4 façade; rewritten in step 10 to `from codey.core import …` |
 | `tests/test_hooks.py` | same — `from codey.hooks import HookEvent, …` keeps working |
-| `tests/test_permissions.py` | same — `from codey.permissions import …` keeps working via step-5 shim, then rewritten in step 10 |
+| `tests/test_permissions.py` | unchanged — `from codey.permissions import …` keeps working because the new `permissions/` package re-exports the same names |
 | `tests/test_tools.py` | unchanged |
 | `tests/test_tui.py` | step 7 rewrites imports: `from codey.ui.app import CodeyApp`, `from codey.ui.modals.approval import ApprovalScreen`, `from codey.ui.modals.profile_picker import ProfilePickerScreen`, `from codey.ui.slash_suggest import SlashSuggest` |
 | `tests/test_tui_todo.py` | step 7 updates import to `from codey.ui.renderers import _make_tui_todo_writer` (or whatever its renamed equivalent is) |
-| `tests/test_todo_nag.py` | unchanged (imports `from codey.builtin_hooks.todo_nag import …`; step-6 shim covers, step 10 rewrites to `from codey.hooks.builtin.todo_nag import …`) |
+| `tests/test_todo_nag.py` | unchanged (imports `from codey.builtin_hooks.todo_nag import …`); covered by the step-6 shim, then rewritten in step 10 to `from codey.hooks.builtin.todo_nag import …` |
 | `tests/test_todo_render.py` | same as test_todo_nag.py |
 | `tests/test_todo_write.py` | unchanged |
 | `tests/test_cli_todo.py` | **deleted in step 1** |
@@ -467,10 +471,16 @@ Each step is a single commit. Total: ~11 commits.
 
 ---
 
-## 15. Open questions for review
+## 15. Resolved decisions
 
-1. **Folder names.** Are `core`, `policy`, `hooks`, `tools`, `ui` the right names? Alternatives considered: `engine` (too overloaded), `permissions` (too narrow), `runtime` (too vague). Open to other suggestions.
-2. **Session location.** Is `core/session.py` right, or should `Session` live at the top level (`src/codey/session.py`) since it's the host-facing handle? Argument for top level: it's not core agent machinery, it's the glue. Argument for `core/`: it lives next to `Agent` which it wraps.
-3. **`UISinks` location.** I put it in `ui/renderers.py`. Alternative: `core/session.py` so `Session.build()` doesn't need to import from `ui/`. Counter-argument: the sinks ARE UI, and `Session.build()` accepts them by structural typing — no import needed if we use `Protocol`.
-4. **Should step 1 (CLI delete) ship as its own PR** ahead of the restructure? Argument for: clean, small, low risk, unblocks the rest. Argument against: extra ceremony for a solo project.
-5. **`__main__.py`** — worth adding for `python -m codey` support? Cheap and a nice-to-have.
+These were open questions during drafting; answered after review.
+
+1. **Folder names.** `core / permissions / hooks / tools / ui`. Chose `permissions` over `policy` — more concrete and matches the existing module name (which becomes the package name in step 5, avoiding a rename in test imports). Considered `engine` (too overloaded), `runtime` (too vague), and `agent` (the folder also holds `Session` and message types, not just the loop) — all rejected.
+
+2. **Session location.** `core/session.py`. Lives next to `Agent` which it wraps; the host imports it via `from codey.core import Session`.
+
+3. **`UISinks` location.** `ui/renderers.py`. Sinks are UI concerns. `Session.build()` accepts them via structural typing (a `Protocol` defined in `core/session.py`) so `core/` doesn't need to import from `ui/`.
+
+4. **Ship order.** CLI deletion ships as **PR-A** ahead of the restructure. Small, low risk, unblocks the rest. The 10-commit restructure ships as **PR-B**. See §9 for the split.
+
+5. **`__main__.py`.** Yes — add it in step 9. Lets `python -m codey` work alongside the installed `codey` console script (the one generated by `pyproject.toml`'s `[project.scripts]` entry, which is what `uv run codey` invokes).
