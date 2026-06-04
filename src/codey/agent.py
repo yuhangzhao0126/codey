@@ -275,11 +275,21 @@ class Agent:
                     )
                     yield ToolResult(id=call_id, name=name, ok=ok, content=content)
 
-                    # PostToolUse — observers only (errors logged, ignored otherwise).
-                    await self.hooks.trigger(HookEvent.POST_TOOL_USE, {
+                    # PostToolUse — observers, plus may rewrite the result the
+                    # model sees via HookResult.modified_post_result. We re-read
+                    # `payload["result"]` after triggering because the hook
+                    # registry mutates it in place for chained hooks.
+                    post_payload = {
                         "tool": name, "arguments": args, "call_id": call_id,
                         "ok": ok, "result": content,
-                    })
+                    }
+                    post = await self.hooks.trigger(HookEvent.POST_TOOL_USE, post_payload)
+                    if post.modified_post_result is not None:
+                        new_content = post_payload["result"]
+                        # Patch the tool Message we just appended a few lines up
+                        # so history reflects what the model will read.
+                        self.history[-1].content = new_content
+                        content = new_content
             else:
                 stop_reason = "error"
                 stop_error = f"hit MAX_ROUNDS ({MAX_ROUNDS})"

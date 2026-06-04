@@ -275,6 +275,39 @@ async def test_pre_tool_use_can_rewrite_arguments(monkeypatch):
     assert dispatched == [("bash", {"command": "echo rewritten"})]
 
 
+async def test_post_tool_use_can_rewrite_history_result(monkeypatch):
+    """A PostToolUse hook's modified_post_result updates the tool Message
+    that gets appended to agent.history (so the model sees the rewrite next
+    round)."""
+    hooks = HookRegistry()
+    def append_reminder(p):
+        return HookResult(modified_post_result=p["result"] + "\n[reminder]")
+    hooks.register(HookEvent.POST_TOOL_USE, append_reminder, name="injector")
+    agent = _agent(hooks)
+
+    async def fake_stream_one_round(self):
+        if not getattr(self, "_called_once", False):
+            self._called_once = True
+            yield _RoundDone(tool_calls=[{
+                "id": "c1", "type": "function",
+                "function": {"name": "bash", "arguments": '{"command": "ls"}'}
+            }])
+        else:
+            yield AssistantTextDelta(text="done")
+            yield _RoundDone(tool_calls=[])
+
+    async def fake_dispatch(self, name, args):
+        return True, "raw tool output"
+
+    monkeypatch.setattr(Agent, "_stream_one_round", fake_stream_one_round)
+    monkeypatch.setattr(ToolRegistry, "dispatch", fake_dispatch)
+
+    [ev async for ev in agent.run("go")]
+    tool_msgs = [m for m in agent.history if m.role == "tool"]
+    assert tool_msgs
+    assert tool_msgs[0].content == "raw tool output\n[reminder]"
+
+
 async def test_stop_fires_on_normal_completion(monkeypatch):
     fired = []
     hooks = HookRegistry()
