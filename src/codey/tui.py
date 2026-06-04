@@ -49,6 +49,8 @@ from .agent import (
     TurnCompleted,
     TurnStarted,
 )
+from rich.markup import escape as rich_escape
+
 from .builtin_hooks import build_default_hooks
 from .config import ConfigFile, Profile
 from .hooks import HookRegistry
@@ -65,6 +67,29 @@ class SlashCommand:
     help: str
     # handler is async; receives the app and the arg string (may be empty)
     handler: Callable[["CodeyApp", str], Awaitable[None]]
+
+
+def _make_tui_todo_writer(line_writer):
+    """Build a writer that formats the todo list as Rich markup lines.
+
+    `line_writer(text: str)` is called once per line (header + each item).
+    Completed items are dim + strikethrough, in_progress is bold, pending
+    is plain.
+    """
+    def writer(todos):
+        if not todos:
+            line_writer("[dim]─── tasks (cleared) ───[/dim]")
+            return
+        line_writer("[dim]─── tasks ───[/dim]")
+        for t in todos:
+            content = rich_escape(t.content)
+            if t.status == "completed":
+                line_writer(f"  [dim][x] [strike]{content}[/strike][/dim]")
+            elif t.status == "in_progress":
+                line_writer(f"  [bold][~] {content}[/bold]")
+            else:
+                line_writer(f"  [ ] {content}")
+    return writer
 
 
 # ---------- approval modal ----------
@@ -378,17 +403,26 @@ class CodeyApp(App[None]):
         def meta_writer(text: str) -> None:
             self._log_meta(text)
 
+        tool_registry = build_default_registry()
+        todo_tool = tool_registry.tools.get("todo_write")
+
+        def todo_line_writer(text: str) -> None:
+            self.transcript.write(text)
+        todo_writer = _make_tui_todo_writer(todo_line_writer) if todo_tool is not None else None
+
         self.hooks = build_default_hooks(
             engine=self.engine,
             approve=self._approve_tool,
             transcript_writer=transcript_writer,
             meta_writer=meta_writer,
+            todo_tool=todo_tool,
+            todo_writer=todo_writer,
         )
 
         self.agent = Agent(
             profile=profile,
             system_prompt=build_system_prompt(),
-            tools=build_default_registry(),
+            tools=tool_registry,
             hooks=self.hooks,
         )
         self._refresh_title()
@@ -620,7 +654,7 @@ class CodeyApp(App[None]):
         self.sub_title = f"{p.name} · {p.model} · cwd: {ws} · mode: {mode_str}"
 
     def _log_meta(self, text: str) -> None:
-        self.transcript.write(f"[dim]{text}[/]")
+        self.transcript.write(f"[dim]{rich_escape(text)}[/]")
 
     def _log_user(self, text: str) -> None:
         self.transcript.write(f"[bold cyan]you  ›[/] {text}")
