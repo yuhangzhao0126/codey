@@ -44,3 +44,42 @@ def test_writer_errors_are_swallowed():
     def boom(_): raise RuntimeError("ui blew up")
     hook = todo_render_hook(tool=tool, writer=boom)
     hook({"tool": "todo_write", "ok": True, "result": "todo list updated"})
+
+
+def test_build_default_hooks_registers_todo_hooks():
+    from codey.builtin_hooks import build_default_hooks
+    from codey.hooks import HookEvent
+    from codey.permissions import PermissionEngine
+
+    tool = TodoWriteTool()
+    reg = build_default_hooks(
+        engine=PermissionEngine(),
+        approve=None,
+        transcript_writer=lambda style, text: None,
+        meta_writer=lambda text: None,
+        todo_tool=tool,
+        todo_writer=lambda todos: None,
+    )
+    names_pre = {h.name for h in reg.list(HookEvent.PRE_TOOL_USE)}
+    names_post = {h.name for h in reg.list(HookEvent.POST_TOOL_USE)}
+    names_stop = {h.name for h in reg.list(HookEvent.STOP)}
+    assert "todo_nag_pre" in names_pre
+    assert "todo_nag_post" in names_post
+    assert "todo_render" in names_post
+    assert "todo_nag_stop" in names_stop
+
+
+def test_build_default_hooks_omits_todo_hooks_without_tool():
+    from codey.builtin_hooks import build_default_hooks
+    from codey.hooks import HookEvent
+    from codey.permissions import PermissionEngine
+
+    reg = build_default_hooks(
+        engine=PermissionEngine(),
+        approve=None,
+        transcript_writer=lambda style, text: None,
+        meta_writer=lambda text: None,
+    )
+    names = {h.name for h in reg.list()}
+    assert "todo_render" not in names
+    assert "todo_nag_pre" not in names
