@@ -37,6 +37,7 @@ def build_default_hooks(
     audit_log_path: Path | None = None,
     todo_tool: TodoWriteTool | None = None,
     todo_writer: TodoWriter | None = None,
+    session_id: str | None = None,
 ) -> HookRegistry:
     reg = HookRegistry(error_sink=meta_writer)
 
@@ -50,14 +51,16 @@ def build_default_hooks(
                  pre_tool_render_hook(transcript_writer),
                  name="transcript_pre")
     reg.register(HookEvent.PRE_TOOL_USE,
-                 audit_log_hook("PreToolUse", log_path=audit_log_path),
+                 audit_log_hook("PreToolUse", log_path=audit_log_path,
+                                session_id=session_id),
                  name="audit_log_pre")
 
     reg.register(HookEvent.POST_TOOL_USE,
                  post_tool_render_hook(transcript_writer),
                  name="transcript_post")
     reg.register(HookEvent.POST_TOOL_USE,
-                 audit_log_hook("PostToolUse", log_path=audit_log_path),
+                 audit_log_hook("PostToolUse", log_path=audit_log_path,
+                                session_id=session_id),
                  name="audit_log_post")
 
     reg.register(HookEvent.STOP,

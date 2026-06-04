@@ -14,7 +14,8 @@ Behavior is identical to the pre-refactor wiring — this is pure relocation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -49,6 +50,7 @@ class Session:
     engine: PermissionEngine
     hooks: HookRegistry
     tools: ToolRegistry
+    session_id: str
 
     @classmethod
     def build(
@@ -63,6 +65,7 @@ class Session:
         ws = (workspace or Path.cwd()).resolve()
         engine = PermissionEngine.load(workspace=ws)
         tools = build_default_registry()
+        session_id = uuid.uuid4().hex[:8]
         hooks = build_default_hooks(
             engine=engine,
             approve=ui_sinks.approve,
@@ -70,6 +73,7 @@ class Session:
             meta_writer=ui_sinks.meta_writer,
             todo_tool=tools.tools.get("todo_write"),
             todo_writer=ui_sinks.todo_writer,
+            session_id=session_id,
         )
         agent = Agent(
             profile=profile,
@@ -78,7 +82,8 @@ class Session:
             hooks=hooks,
         )
         return cls(profile=profile, workspace=ws, cfg=cfg, agent=agent,
-                   engine=engine, hooks=hooks, tools=tools)
+                   engine=engine, hooks=hooks, tools=tools,
+                   session_id=session_id)
 
     async def swap_profile(self, name: str) -> Profile:
         new_profile = self.cfg.resolve(name)

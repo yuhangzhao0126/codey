@@ -349,8 +349,8 @@ async def test_stop_fires_on_error(monkeypatch):
 
 async def test_audit_log_writes_jsonl(tmp_path: Path):
     log_path = tmp_path / "calls.jsonl"
-    pre = audit_log_hook("PreToolUse", log_path=log_path)
-    post = audit_log_hook("PostToolUse", log_path=log_path)
+    pre = audit_log_hook("PreToolUse", log_path=log_path, session_id="sess1")
+    post = audit_log_hook("PostToolUse", log_path=log_path, session_id="sess1")
     pre({"tool": "bash", "arguments": {"command": "ls"}, "call_id": "c1"})
     post({"tool": "bash", "arguments": {"command": "ls"}, "call_id": "c1",
           "ok": True, "result": "exit=0\nfoo bar"})
@@ -359,19 +359,30 @@ async def test_audit_log_writes_jsonl(tmp_path: Path):
     a = json.loads(lines[0])
     b = json.loads(lines[1])
     assert a["event"] == "PreToolUse" and a["tool"] == "bash"
+    assert a["session_id"] == "sess1"
     assert b["event"] == "PostToolUse" and b["ok"] is True
-    assert "foo bar" in b["result_preview"]
+    assert b["session_id"] == "sess1"
+    assert b["result"] == "exit=0\nfoo bar"
 
 
-async def test_audit_log_truncates_large_result(tmp_path: Path):
+async def test_audit_log_stores_full_result_untruncated(tmp_path: Path):
     log_path = tmp_path / "calls.jsonl"
     post = audit_log_hook("PostToolUse", log_path=log_path)
     big = "x" * 5000
     post({"tool": "bash", "arguments": {}, "call_id": "c", "ok": True, "result": big})
     entry = json.loads(log_path.read_text().splitlines()[0])
-    assert entry["result_truncated"] is True
-    assert entry["result_chars"] == 5000
-    assert len(entry["result_preview"]) < 5000
+    assert entry["result"] == big
+    assert "result_preview" not in entry
+    assert "result_truncated" not in entry
+    assert "result_chars" not in entry
+
+
+async def test_audit_log_omits_session_id_when_none(tmp_path: Path):
+    log_path = tmp_path / "calls.jsonl"
+    pre = audit_log_hook("PreToolUse", log_path=log_path)
+    pre({"tool": "bash", "arguments": {}, "call_id": "c"})
+    entry = json.loads(log_path.read_text().splitlines()[0])
+    assert "session_id" not in entry
 
 
 # ---------- built-in hooks: transcript ----------
