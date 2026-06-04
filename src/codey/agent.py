@@ -30,6 +30,8 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Protocol
 from openai import AsyncOpenAI, OpenAIError
 
 from .config import Profile
+from .core import history as history_mod
+from .core import streaming as streaming_mod
 from .core.events import (
     AssistantMessageCompleted,
     AssistantTextDelta,
@@ -163,10 +165,10 @@ class Agent:
                 async for ev in self._stream_one_round():
                     if isinstance(ev, AssistantTextDelta):
                         text += ev.text
-                    elif isinstance(ev, _RoundDone):
+                        yield ev
+                    elif isinstance(ev, streaming_mod.RoundDone):
                         tool_calls = ev.tool_calls
                         break
-                    yield ev
 
                 # Persist this round's assistant message exactly as the API saw it.
                 assistant_text_parts.append(text)
@@ -250,41 +252,13 @@ class Agent:
             )
 
     def _repair_history(self) -> None:
-        """Drop trailing assistant.tool_calls messages whose tool results never
-        landed (e.g. user cancelled mid-tool-call last turn, or a tool dispatch
-        raised). Walks from the end backwards: any assistant message with
-        tool_calls must be followed by one `role:"tool"` message per call_id."""
-        while self.history:
-            last = self.history[-1]
-            if last.role == "assistant" and last.tool_calls:
-                self.history.pop()
-                continue
-            if last.role == "tool":
-                # tool result with no preceding assistant tool_calls is also junk.
-                # Check by walking back to find the matching assistant call.
-                ids_seen: set[str] = set()
-                i = len(self.history) - 1
-                while i >= 0 and self.history[i].role == "tool":
-                    if self.history[i].tool_call_id:
-                        ids_seen.add(self.history[i].tool_call_id)
-                    i -= 1
-                if i < 0 or self.history[i].role != "assistant" or not self.history[i].tool_calls:
-                    # orphaned tool block; drop just the trailing tool messages
-                    del self.history[i + 1:]
-                    continue
-                expected = {c["id"] for c in self.history[i].tool_calls if c.get("id")}
-                if expected - ids_seen:
-                    # Some tool results are missing for this assistant call;
-                    # drop the whole assistant + tool block.
-                    del self.history[i:]
-                    continue
-            break
+        history_mod.repair(self.history)
 
     def reset(self) -> None:
         """Clear chat history, keeping the system message. Also clears any
         per-session tool state that survives outside of history — currently
         just the todo_write task list."""
-        self.history = [m for m in self.history if m.role == "system"]
+        self.history = history_mod.reset_non_system(self.history)
         todo_tool = self.tools.tools.get("todo_write")
         if todo_tool is not None and hasattr(todo_tool, "todos"):
             todo_tool.todos = []
@@ -325,48 +299,16 @@ class Agent:
     def _build_client(profile: Profile) -> AsyncOpenAI:
         return AsyncOpenAI(api_key=profile.api_key, base_url=profile.base_url)
 
-    async def _stream_one_round(self) -> AsyncIterator[Event | "_RoundDone"]:
-        """Stream a single model response. Yields text deltas, then a _RoundDone
-        sentinel carrying any fully-assembled tool calls."""
-        kwargs: dict[str, Any] = {
-            "model": self.profile.model,
-            "messages": [m.to_wire() for m in self.history],
-            "stream": True,
-        }
-        schemas = self.tools.schemas()
-        if schemas:
-            kwargs["tools"] = schemas
-
-        stream = await self._client.chat.completions.create(**kwargs)
-
-        # tool_calls stream in fragments keyed by `index`; reassemble here.
-        partial: dict[int, dict[str, Any]] = {}
-
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-
-            if delta.content:
-                yield AssistantTextDelta(text=delta.content)
-
-            for tc in delta.tool_calls or []:
-                slot = partial.setdefault(
-                    tc.index,
-                    {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
-                )
-                if tc.id:
-                    slot["id"] = tc.id
-                if tc.function and tc.function.name:
-                    slot["function"]["name"] = tc.function.name
-                if tc.function and tc.function.arguments:
-                    slot["function"]["arguments"] += tc.function.arguments
-
-        tool_calls = [partial[i] for i in sorted(partial)] if partial else []
-        yield _RoundDone(tool_calls=tool_calls)
+    async def _stream_one_round(self) -> AsyncIterator[AssistantTextDelta | "_RoundDone"]:
+        """Thin wrapper around core.streaming.stream_one_round so tests can
+        monkeypatch the per-instance method. Yields AssistantTextDelta and
+        exactly one _RoundDone sentinel."""
+        async for ev in streaming_mod.stream_one_round(
+            self._client, self.profile, self.history, self.tools.schemas()
+        ):
+            yield ev
 
 
-@dataclass
-class _RoundDone:
-    """Internal sentinel: end of one model round, with any tool calls collected."""
-    tool_calls: list[dict[str, Any]]
+# Back-compat alias for tests / external callers that import _RoundDone from
+# codey.agent. The canonical name is core.streaming.RoundDone.
+_RoundDone = streaming_mod.RoundDone
