@@ -214,6 +214,12 @@ that should exist. Don't create plan / design / summary files.
   question about whether `str` should also be allowed as a shorthand for
   `HookResult(cancel=True, result=str)` — discussed but not implemented.
   Pick one if you touch the hook machinery.
+- `HookResult.modified_post_result` is the only PostToolUse mutation
+  channel and it bypasses the usual "hooks observe, don't decide"
+  spirit of PostToolUse. Today it has exactly one user (the `todo_nag`
+  hook, which appends a "plan first" reminder to the model-visible
+  tool result). If a second use case appears, reconsider whether a
+  full "tool result interceptor" abstraction is warranted instead.
 
 ## When in doubt
 
