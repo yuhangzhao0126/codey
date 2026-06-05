@@ -447,3 +447,32 @@ async def test_permission_hook_yolo_skips_prompt():
                          "call_id": "x"})
     assert result is None
     assert approve_calls == []
+
+
+# ---------- built-in hooks: audit log (sub-agent extensions) ----------
+
+def test_audit_log_emits_parent_session_id(tmp_path):
+    """When a hook is constructed with parent_session_id, every line includes it.
+    Parent-only hooks (parent_session_id=None) must omit the field entirely."""
+    from codey.hooks.builtin.audit_log import audit_log_hook
+
+    log = tmp_path / "calls.jsonl"
+
+    parent_hook = audit_log_hook(
+        "PreToolUse", log_path=log, session_id="abc12345",
+        parent_session_id=None,
+    )
+    child_hook = audit_log_hook(
+        "PreToolUse", log_path=log, session_id="abc12345.sub.1",
+        parent_session_id="abc12345",
+    )
+
+    parent_hook({"tool": "bash", "arguments": {"command": "ls"}, "call_id": "p1"})
+    child_hook({"tool": "bash", "arguments": {"command": "pwd"}, "call_id": "c1"})
+
+    lines = [json.loads(l) for l in log.read_text().splitlines()]
+    assert "parent_session_id" not in lines[0]
+    assert lines[0]["session_id"] == "abc12345"
+    assert lines[1]["parent_session_id"] == "abc12345"
+    assert lines[1]["session_id"] == "abc12345.sub.1"
+

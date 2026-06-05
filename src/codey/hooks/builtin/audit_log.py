@@ -8,9 +8,9 @@ never break the agent.
 
 Each line includes the host-supplied `session_id` so a single tail of the
 file can be filtered to one run with `jq 'select(.session_id == "abc123")'`.
-The full tool `result` is stored — for a personal-use agent the disk cost
-is negligible and being able to grep the raw output is exactly what makes
-running the TUI without per-call transcript lines tolerable.
+If the hook was constructed for a sub-agent, every line also carries
+`parent_session_id`, recovering the parent→child causal chain with
+`jq 'select(.parent_session_id == "abc123")'`.
 """
 
 from __future__ import annotations
@@ -29,12 +29,14 @@ def audit_log_hook(
     log_path: Path | None = None,
     now: "callable | None" = None,
     session_id: str | None = None,
+    parent_session_id: str | None = None,
 ) -> HookCallback:
     """Return a hook callback. `event_kind` is "PreToolUse" or "PostToolUse"
     and is recorded in each line so a single tail of the file shows both.
 
     `session_id` is stamped onto every line; omit it (None) and the field
-    is left out.
+    is left out. `parent_session_id` follows the same convention and is set
+    by sub-agents so `jq` can reconstruct the parent→child tree.
 
     `now` is an optional clock injection point for tests. If None, we use
     datetime.now (called at fire time, not import time)."""
@@ -46,7 +48,7 @@ def audit_log_hook(
 
     def hook(payload: dict[str, Any]) -> HookResult | None:
         try:
-            line = _line(event_kind, _ts(), payload, session_id)
+            line = _line(event_kind, _ts(), payload, session_id, parent_session_id)
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as f:
                 f.write(line + "\n")
@@ -57,10 +59,13 @@ def audit_log_hook(
 
 
 def _line(event_kind: str, ts: str, payload: dict[str, Any],
-          session_id: str | None) -> str:
+          session_id: str | None,
+          parent_session_id: str | None) -> str:
     entry: dict[str, Any] = {"ts": ts}
     if session_id is not None:
         entry["session_id"] = session_id
+    if parent_session_id is not None:
+        entry["parent_session_id"] = parent_session_id
     entry["event"] = event_kind
     entry["tool"] = payload.get("tool")
     entry["arguments"] = payload.get("arguments")
