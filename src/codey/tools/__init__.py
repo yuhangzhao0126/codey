@@ -13,6 +13,7 @@ from .bash import ApproveFn, BashTool, Verdict
 from .grep import GrepTool
 from .list_dir import ListDirTool
 from .read_file import ReadFileTool
+from .spawn_agent import SpawnAgentTool
 from .todo_write import TodoWriteTool
 from .write_file import WriteFileTool
 
@@ -38,6 +39,7 @@ __all__ = [
     "GrepTool",
     "ListDirTool",
     "ReadFileTool",
+    "SpawnAgentTool",
     "TodoWriteTool",
     "Verdict",
     "WriteFileTool",

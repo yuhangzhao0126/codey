@@ -140,6 +140,9 @@ class Session:
         # Capture for build_child_agent (need these to build child hooks).
         sess._ui_approve = ui_sinks.approve
         sess._meta_writer = ui_sinks.meta_writer
+
+        from ..tools.spawn_agent import SpawnAgentTool
+        tools.register(SpawnAgentTool(session_provider=lambda: sess))
         return sess
 
     async def swap_profile(self, name: str) -> Profile:
