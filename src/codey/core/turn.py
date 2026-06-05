@@ -20,6 +20,7 @@ turn always starts from a clean baseline.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
@@ -133,8 +134,13 @@ class Agent:
                 if not tool_calls:
                     break  # natural stop
 
-                # Dispatch each tool call and append results to history.
-                for call in tool_calls:
+                # Dispatch all tool calls concurrently. Per-call hook order
+                # (PRE → request event → dispatch → result event → POST) is
+                # preserved inside _dispatch_one. Inter-call order is not.
+                #
+                # OpenAI matches tool responses by tool_call_id, not position,
+                # so nondeterministic history-append order is wire-safe.
+                async def _dispatch_one(call: dict) -> list[Event]:
                     call_id = call["id"]
                     name = call["function"]["name"]
                     try:
@@ -142,29 +148,31 @@ class Agent:
                     except json.JSONDecodeError:
                         args = {}
 
-                    # PreToolUse — hooks may rewrite args or cancel.
+                    out: list[Event] = []
+
                     pre = await self.hooks.trigger(HookEvent.PRE_TOOL_USE, {
                         "tool": name, "arguments": args, "call_id": call_id,
                     })
                     if pre.modified_arguments is not None:
                         args = pre.modified_arguments
 
-                    yield ToolCallRequested(id=call_id, name=name, arguments=args)
+                    out.append(ToolCallRequested(id=call_id, name=name, arguments=args))
 
                     if pre.cancel:
                         ok = False
                         content = pre.result or "error: tool cancelled by hook"
                     else:
                         ok, content = await self.tools.dispatch(name, args)
+
+                    # Capture index BEFORE append so a post-hook rewrite lands
+                    # on this call's message even with concurrent appends from
+                    # other _dispatch_one tasks.
+                    idx = len(self.history)
                     self.history.append(
                         Message(role="tool", tool_call_id=call_id, name=name, content=content)
                     )
-                    yield ToolResult(id=call_id, name=name, ok=ok, content=content)
+                    out.append(ToolResult(id=call_id, name=name, ok=ok, content=content))
 
-                    # PostToolUse — observers, plus may rewrite the result the
-                    # model sees via HookResult.modified_post_result. We re-read
-                    # `payload["result"]` after triggering because the hook
-                    # registry mutates it in place for chained hooks.
                     post_payload = {
                         "tool": name, "arguments": args, "call_id": call_id,
                         "ok": ok, "result": content,
@@ -172,10 +180,19 @@ class Agent:
                     post = await self.hooks.trigger(HookEvent.POST_TOOL_USE, post_payload)
                     if post.modified_post_result is not None:
                         new_content = post_payload["result"]
-                        # Patch the tool Message we just appended a few lines up
-                        # so history reflects what the model will read.
-                        self.history[-1].content = new_content
-                        content = new_content
+                        self.history[idx].content = new_content
+                        # Patch the ToolResult event we appended above so the
+                        # event stream and history agree on what the model saw.
+                        out[-1] = ToolResult(id=call_id, name=name, ok=ok, content=new_content)
+
+                    return out
+
+                per_call_events = await asyncio.gather(
+                    *[_dispatch_one(call) for call in tool_calls]
+                )
+                for events in per_call_events:
+                    for ev in events:
+                        yield ev
             else:
                 stop_reason = "error"
                 stop_error = f"hit MAX_ROUNDS ({MAX_ROUNDS})"
