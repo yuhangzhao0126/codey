@@ -15,7 +15,8 @@ Behavior is identical to the pre-refactor wiring — this is pure relocation.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -46,6 +47,40 @@ class UISinks(Protocol):
 
 
 @dataclass
+class SubAgentRecorder:
+    """In-memory store of every event each sub-agent emitted.
+
+    Bounded per child to keep memory predictable; the audit log is the
+    persistent record. Read by the /subs panel — snapshot-on-open, no
+    live tail.
+    """
+    per_child_cap: int = 10_000
+    _events: dict[str, deque] = field(default_factory=dict)
+    _order: list[str] = field(default_factory=list)
+    _labels: dict[str, str] = field(default_factory=dict)
+
+    def append(self, child_session_id: str, event: Any) -> None:
+        bucket = self._events.get(child_session_id)
+        if bucket is None:
+            bucket = deque(maxlen=self.per_child_cap)
+            self._events[child_session_id] = bucket
+            self._order.append(child_session_id)
+        bucket.append(event)
+
+    def events_for(self, child_session_id: str) -> list:
+        return list(self._events.get(child_session_id, ()))
+
+    def children(self) -> list[str]:
+        return list(self._order)
+
+    def set_label(self, child_session_id: str, description: str) -> None:
+        self._labels[child_session_id] = description
+
+    def label_for(self, child_session_id: str) -> str:
+        return self._labels.get(child_session_id, "(no description)")
+
+
+@dataclass
 class Session:
     profile: Profile
     workspace: Path
@@ -55,6 +90,11 @@ class Session:
     hooks: HookRegistry
     tools: ToolRegistry
     session_id: str
+    subagent_recorder: SubAgentRecorder = field(default_factory=SubAgentRecorder)
+    _sub_counter: int = 0
+    _ui_approve: Any = None
+    _audit_log_path: Any = None
+    _meta_writer: Any = None
 
     @classmethod
     def build(
@@ -94,15 +134,64 @@ class Session:
             tools=tools,
             hooks=hooks,
         )
-        return cls(profile=profile, workspace=ws, cfg=cfg, agent=agent,
+        sess = cls(profile=profile, workspace=ws, cfg=cfg, agent=agent,
                    engine=engine, hooks=hooks, tools=tools,
                    session_id=session_id)
+        # Capture for build_child_agent (need these to build child hooks).
+        sess._ui_approve = ui_sinks.approve
+        sess._meta_writer = ui_sinks.meta_writer
+        return sess
 
     async def swap_profile(self, name: str) -> Profile:
         new_profile = self.cfg.resolve(name)
         await self.agent.swap_profile(new_profile)
         self.profile = new_profile
         return new_profile
+
+    def build_child_agent(
+        self,
+        *,
+        description: str,
+        profile_name: str | None = None,
+    ) -> tuple[Agent, str]:
+        """Construct a sub-agent. The ONLY place that knows how.
+
+        Returns (child_agent, child_session_id). The caller (SpawnAgentTool)
+        is responsible for draining the child's run() and calling
+        child.aclose() when done.
+        """
+        from ..hooks.builtin import build_child_hooks
+        from ..prompt import build_subagent_system_prompt
+
+        child_profile = self.profile if profile_name is None else self.cfg.resolve(profile_name)
+
+        self._sub_counter += 1
+        child_id = f"{self.session_id}.sub.{self._sub_counter}"
+
+        EXCLUDED_FROM_CHILD = {"spawn_agent", "todo_write"}
+        child_tools = ToolRegistry(tools={
+            n: t for n, t in self.tools.tools.items()
+            if n not in EXCLUDED_FROM_CHILD
+        })
+
+        child_hooks = build_child_hooks(
+            engine=self.engine,
+            approve=self._ui_approve,
+            audit_log_path=self._audit_log_path,
+            meta_writer=self._meta_writer,
+            session_id=child_id,
+            parent_session_id=self.session_id,
+        )
+
+        child_system = build_subagent_system_prompt(description, cwd=self.workspace)
+
+        child = Agent(
+            profile=child_profile,
+            system_prompt=child_system,
+            tools=child_tools,
+            hooks=child_hooks,
+        )
+        return child, child_id
 
     async def aclose(self) -> None:
         await self.agent.aclose()
