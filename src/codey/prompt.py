@@ -41,3 +41,29 @@ def build_system_prompt(cwd: Path | None = None) -> str:
         _read_if_exists(project_path),
     ]
     return "\n\n".join(layer for layer in layers if layer)
+
+
+def build_subagent_system_prompt(description: str, cwd: Path | None = None) -> str:
+    """System prompt for a sub-agent.
+
+    Layers, in order:
+      1. default sub-agent prompt — src/codey/prompts/subagent.md
+      2. a one-line description of THIS sub-agent's task
+      3. user overlay — ~/.config/codey/system.md (same one the parent uses)
+      4. project overlay — ./codey.md (same one the parent uses)
+
+    Layers 1 and 2 are always present. Missing 3 and 4 are skipped silently.
+    Per-repo conventions in codey.md apply to children too — sub-agents work
+    on the same codebase under the same rules.
+    """
+    default = files("codey.prompts").joinpath("subagent.md").read_text(encoding="utf-8").strip()
+    task_line = f"Your task (from the parent agent): {description.strip()}"
+    project_path = (cwd or Path.cwd()) / PROJECT_PROMPT_PATH
+
+    layers = [
+        default,
+        task_line,
+        _read_if_exists(USER_PROMPT_PATH),
+        _read_if_exists(project_path),
+    ]
+    return "\n\n".join(layer for layer in layers if layer)
