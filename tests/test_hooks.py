@@ -476,3 +476,33 @@ def test_audit_log_emits_parent_session_id(tmp_path):
     assert lines[1]["parent_session_id"] == "abc12345"
     assert lines[1]["session_id"] == "abc12345.sub.1"
 
+
+def test_build_child_hooks_shape():
+    """Child hook registry: permission + audit only. NO Stop, NO todo, NO transcript."""
+    from codey.hooks import HookEvent
+    from codey.hooks.builtin import build_child_hooks
+    from codey.permissions import PermissionEngine
+
+    eng = PermissionEngine.load(workspace=None)
+
+    reg = build_child_hooks(
+        engine=eng,
+        approve=None,
+        audit_log_path=None,  # default path; we don't assert on writes here
+        meta_writer=lambda _: None,
+        session_id="parent.sub.1",
+        parent_session_id="parent",
+    )
+
+    names_by_event = {ev: [h.name for h in reg.list(ev)] for ev in HookEvent}
+
+    # Permission first in PreToolUse, then audit_log_pre.
+    assert names_by_event[HookEvent.PRE_TOOL_USE] == ["permission", "audit_log_pre"]
+    # PostToolUse: only audit_log_post (no transcript_post, no todo_render).
+    assert names_by_event[HookEvent.POST_TOOL_USE] == ["audit_log_post"]
+    # No Stop hooks (this is the load-bearing one: stop_logger would print
+    # "[turn finished]" mid-parent-turn for every child).
+    assert names_by_event[HookEvent.STOP] == []
+    # No UserPromptSubmit hooks (children don't get free-form user prompts).
+    assert names_by_event[HookEvent.USER_PROMPT_SUBMIT] == []
+

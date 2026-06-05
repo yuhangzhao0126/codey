@@ -106,8 +106,60 @@ def build_default_hooks(
     return reg
 
 
+def build_child_hooks(
+    *,
+    engine: PermissionEngine,
+    approve: ApproveFn | None,
+    audit_log_path: Path | None = None,
+    meta_writer: MetaWriter,
+    session_id: str,
+    parent_session_id: str,
+) -> HookRegistry:
+    """Curated hook registry for a sub-agent Agent.
+
+    Shares the permission engine + approve callback + audit log + meta writer
+    with the parent, but registers only the hooks that make sense for a
+    child:
+
+      PRE_TOOL_USE   permission  → audit_log_pre
+      POST_TOOL_USE  audit_log_post
+      STOP           (intentionally none — see below)
+
+    Deliberately omitted:
+      - stop_logger: would print "[turn finished]" mid-parent-turn for every
+        child completion. Children stop silently from the user's POV; the
+        spawn_agent meta line covers the visible signal.
+      - transcript_pre/post: null in TUI anyway; child tool calls live in
+        the audit log and the /subs panel.
+      - todo_nag / todo_render: children don't have todo_write in their tool
+        registry, so these would either no-op or double-render the parent's
+        todos.
+      - OTel: child-span support is a v2 follow-up; the current OTel hook
+        is shaped around per-turn spans for a single agent.
+
+    Every audit-log line emitted by a child carries `parent_session_id` so
+    `jq` can reconstruct the parent→child causal chain.
+    """
+    reg = HookRegistry(error_sink=meta_writer)
+    reg.register(HookEvent.PRE_TOOL_USE,
+                 permission_check_hook(engine=engine, approve=approve),
+                 name="permission")
+    reg.register(HookEvent.PRE_TOOL_USE,
+                 audit_log_hook("PreToolUse", log_path=audit_log_path,
+                                session_id=session_id,
+                                parent_session_id=parent_session_id),
+                 name="audit_log_pre")
+    reg.register(HookEvent.POST_TOOL_USE,
+                 audit_log_hook("PostToolUse", log_path=audit_log_path,
+                                session_id=session_id,
+                                parent_session_id=parent_session_id),
+                 name="audit_log_post")
+    return reg
+
+
 __all__ = [
     "build_default_hooks",
+    "build_child_hooks",
     "audit_log_hook",
     "build_otel_hooks",
     "otel_enabled",
