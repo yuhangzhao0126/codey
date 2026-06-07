@@ -69,6 +69,7 @@ src/codey/
       stop_logger.py#     Stop → [turn finished: ...] meta line
       todo_nag.py   #     Reminds the model to plan after quiet rounds
       todo_render.py#     Renders the todo list into the UI
+      subagent_render.py # Pre+PostToolUse → ⏵/⏷ meta lines for spawn_agent
       otel.py       #     Opt-in OpenTelemetry tracing (--otel / CODEY_OTEL=1)
 
   permissions/      # "What is the agent allowed to do"
@@ -81,11 +82,13 @@ src/codey/
                     # gating happens in the PreToolUse hook.
     bash.py read_file.py list_dir.py grep.py
     write_file.py apply_edit.py todo_write.py
+    spawn_agent.py  #   Spawn an isolated sub-agent (depth-1 only).
 
   config.py         # Profile loading from ~/.config/codey/config.toml
   prompt.py         # 3-layer system prompt: package default → user
                     # → ./codey.md (this file)
-  prompts/system.md # default system prompt (always loaded)
+  prompts/system.md   # default system prompt (always loaded)
+  prompts/subagent.md # default sub-agent system prompt (children only)
 
   ui/               # Textual full-screen UI (was tui.py)
     app.py          #   CodeyApp — compose, on_mount, key routing
@@ -93,7 +96,7 @@ src/codey/
     slash_commands.py / slash_suggest.py
     renderers.py    #   _log_* helpers + UISinks
     modals/         #   approval.py, remember.py, profile_picker.py,
-                    #   mode_picker.py
+                    #   mode_picker.py, subagent_panel.py
 ```
 
 ### How a turn flows
@@ -105,16 +108,52 @@ user types →
   → loops MAX_ROUNDS times:
       → calls the LLM (_stream_one_round, streams text + reassembles tool_calls)
       → if no tool_calls: break (natural stop)
-      → for each tool_call:
-          → fires PreToolUse (permission hook may cancel / rewrite args)
-          → dispatches tool via ToolRegistry
-          → fires PostToolUse (audit, etc.)
+      → dispatches ALL tool_calls of the round CONCURRENTLY via
+        asyncio.gather; per-call hook order (PRE → request event → dispatch
+        → result event → POST) is preserved inside each task; inter-call
+        order is not. OpenAI matches tool responses by tool_call_id, not
+        position, so concurrent history-append is wire-safe.
   → yields TurnCompleted
   → always fires Stop hook in finally
 ```
 
 Cancellation (`esc` / `Ctrl-C`) and exceptions both roll history back to
 the pre-turn baseline so the next request goes out clean.
+
+### Sub-agents
+
+The model can offload work to isolated sub-agents via the `spawn_agent` tool.
+Each child gets a fresh context window, runs to completion, returns its final
+assistant message as the tool result. Children inherit the parent's tools and
+permissions, except they cannot themselves spawn further sub-agents and do
+not have `todo_write` (the parent owns the plan). Multiple `spawn_agent`
+calls in one assistant turn execute in parallel thanks to the concurrent
+dispatch described above.
+
+Key files:
+
+  - `tools/spawn_agent.py`        — the model-facing tool; pure
+  - `core/session.py:build_child_agent` — single place that constructs a
+                                          child Agent (profile, hooks,
+                                          tools, system prompt)
+  - `core/session.py:SubAgentRecorder` — in-memory cap-bounded store of every
+                                         event each child emitted; powers
+                                         the `/subs` panel
+  - `hooks/builtin/__init__.py:build_child_hooks` — curated hook registry
+        for children (permission + audit only; no stop_logger, transcript,
+        todo, OTel, or subagent_render)
+  - `hooks/builtin/subagent_render.py` — emits ⏵ on PreToolUse and ⏷ on
+        PostToolUse for every `spawn_agent` call on the parent's transcript
+  - `prompts/subagent.md`         — default sub-agent system prompt
+  - `ui/modals/subagent_panel.py` — `/subs` panel: snapshot-on-open
+        listing of every child this session spawned + event timeline
+
+Audit-log linkage: every line a child writes to `~/.cache/codey/calls.jsonl`
+carries `parent_session_id`, so `jq 'select(.parent_session_id == "abc12345")'`
+reconstructs the parent→child causal chain.
+
+Approval modals triggered by a child include a `requester` line so the user
+sees which sub-agent is asking (e.g. `sub-agent[2] "investigate-db"`).
 
 ### Event stream
 
@@ -128,7 +167,7 @@ render (transcript hook does this) via UI-supplied writers.
 ## House rules (read before writing code)
 
 ### Don't break the test suite
-`uv run pytest` is **the** verification. ~153 tests, runs in ~5 s. If you
+`uv run pytest` is **the** verification. ~196 tests, runs in ~8 s. If you
 break it, fix it before committing. New behavior gets a new test.
 
 ### Tools are pure
@@ -139,6 +178,13 @@ Schema), `async run(arguments)`. They don't take an `engine`, don't take an
 (`hooks/builtin/transcript.py`). Adding a new tool is one file + one line
 in `tools/__init__.py:build_default_registry`. See `README.md` § "Adding a
 new tool" for the recipe.
+
+(One narrow exception: `spawn_agent` accepts a `session_provider` callable
+because it has to construct child `Agent`s — and that needs the live
+Session for profile resolution, the shared engine, and the shared audit
+writer. It's still pure in the contractual sense: no permission logic, no
+UI rendering, returns a string. The wiring lives in `Session.build`, not
+`build_default_registry`.)
 
 ### Tools return strings, not exceptions
 On any failure (missing file, denied permission, timeout) a tool returns
@@ -158,6 +204,12 @@ message per call id. The OpenAI API 400s otherwise. `Agent._repair_history()`
 fixes this at the top of each `run()`, so don't worry about it during normal
 flow — but if you add a new code path that mutates `self.history` outside
 `run()`, double-check.
+
+Concurrent dispatch (`asyncio.gather` in `turn.py`) appends tool result
+messages in nondeterministic order. That's fine because the API matches by
+`tool_call_id`, not position. The PostToolUse-rewrite path captures
+`idx = len(self.history)` *before* its append so a rewrite always lands on
+the correct call's message even when other tasks append in parallel.
 
 ### Don't hardcode permission policy in tools
 Built-in denylist / allowlist live in `permissions/rules.py`. User rules in
@@ -196,7 +248,7 @@ that should exist. Don't create plan / design / summary files.
 - Commit message body explains **why**, not what.
 - Always include `Co-Authored-By: <Model> <noreply@anthropic.com>` for AI
   contributions.
-- All 126 tests must pass before committing.
+- All 196 tests must pass before committing.
 - Use the existing 4-bucket style for big commits (see recent history):
   context → fix → behavior change → tests passing count.
 
