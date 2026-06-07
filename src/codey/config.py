@@ -24,6 +24,9 @@ from dotenv import load_dotenv
 CONFIG_PATH = Path.home() / ".config" / "codey" / "config.toml"
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_CONTEXT_WINDOW = 1_000_000      # 1M tokens — mainstream long-context tier
+DEFAULT_MAX_OUTPUT_TOKENS = 4_096
+DEFAULT_COMPACT_HEADROOM = 13_000
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,9 @@ class Profile:
     api_key: str
     base_url: str
     model: str
+    context_window: int = DEFAULT_CONTEXT_WINDOW
+    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    compact_headroom: int = DEFAULT_COMPACT_HEADROOM
 
 
 @dataclass
@@ -66,6 +72,9 @@ class ConfigFile:
                 api_key=body.get("api_key", ""),
                 base_url=body.get("base_url", DEFAULT_BASE_URL),
                 model=body.get("model", DEFAULT_MODEL),
+                context_window=int(body.get("context_window", DEFAULT_CONTEXT_WINDOW)),
+                max_output_tokens=int(body.get("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)),
+                compact_headroom=int(body.get("compact_headroom", DEFAULT_COMPACT_HEADROOM)),
             )
 
         default = data.get("default_profile") or next(iter(profiles))
