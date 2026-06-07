@@ -690,7 +690,7 @@ Three new optional fields on each `[profiles.*]` entry in
 base_url = "https://api.deepseek.com/v1"
 api_key  = "..."
 model    = "deepseek-chat"
-context_window     = 128000   # default if absent
+context_window     = 1000000  # default if absent (1M tokens)
 max_output_tokens  = 4096     # default if absent
 compact_headroom   = 13000    # default if absent
 ```
@@ -700,9 +700,10 @@ fields with the defaults above. `ConfigFile.load()` reads the optional
 keys if present; absent keys use the dataclass defaults. No backwards
 compatibility break — existing config.toml files continue to load.
 
-These defaults work for most of today's mainstream long-context models
-(GPT-4o, Claude 3.5 Sonnet, DeepSeek-Chat, Qwen-2.5 etc.). Users on
-smaller-context models override per profile.
+The 1M default matches the current mainstream long-context tier (GPT-5,
+Claude 4.x with 1M extended context, Gemini 2.5, Qwen-3 Max). Users on
+smaller-context models (older Claude / DeepSeek-Chat at 128k, anything
+local at 32k/8k) override per profile.
 
 ## Sub-agents
 
