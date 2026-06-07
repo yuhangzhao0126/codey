@@ -40,6 +40,8 @@ def build_slash_commands() -> dict[str, SlashCommand]:
                      lambda app, arg: app._cmd_permission(arg)),
         SlashCommand("hooks",      "list / enable / disable hooks: /hooks [enable|disable <name>]",
                      lambda app, arg: app._cmd_hooks(arg)),
+        SlashCommand("subs",       "show this session's sub-agents and their event timelines",
+                     lambda app, _: app._cmd_subs()),
     ]
     return {c.name: c for c in cmds}
 

@@ -5,6 +5,7 @@ from .modals.approval import ApprovalScreen
 from .modals.mode_picker import ModePickerScreen
 from .modals.profile_picker import ProfilePickerScreen
 from .modals.remember import RememberScreen
+from .modals.subagent_panel import SubAgentPanelScreen
 from .slash_suggest import SlashSuggest
 
 __all__ = [
@@ -14,6 +15,7 @@ __all__ = [
     "ProfilePickerScreen",
     "RememberScreen",
     "SlashSuggest",
+    "SubAgentPanelScreen",
     "main",
     "run",
 ]

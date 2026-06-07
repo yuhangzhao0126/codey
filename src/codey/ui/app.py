@@ -45,6 +45,7 @@ from .modals.approval import ApprovalScreen
 from .modals.mode_picker import ModePickerScreen
 from .modals.profile_picker import ProfilePickerScreen
 from .modals.remember import RememberScreen
+from .modals.subagent_panel import SubAgentPanelScreen
 from .renderers import UISinks
 from .slash_commands import SlashCommand, build_slash_commands, handle_slash
 from .slash_suggest import SlashSuggest
@@ -328,6 +329,14 @@ class CodeyApp(App[None]):
     async def _cmd_reset(self) -> None:
         self.agent.reset()
         self._log_meta("(history cleared)")
+
+    async def _cmd_subs(self) -> None:
+        """Open the /subs panel modal (worker context required by push_screen_wait)."""
+        async def _open() -> None:
+            await self.push_screen_wait(
+                SubAgentPanelScreen(self.session.subagent_recorder)
+            )
+        self.run_worker(_open(), exclusive=True, group="subs-panel")
 
     async def _cmd_profiles_list(self) -> None:
         active = self.agent.profile.name
