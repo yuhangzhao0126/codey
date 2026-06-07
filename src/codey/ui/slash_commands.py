@@ -42,6 +42,8 @@ def build_slash_commands() -> dict[str, SlashCommand]:
                      lambda app, arg: app._cmd_hooks(arg)),
         SlashCommand("subs",       "show this session's sub-agents and their event timelines",
                      lambda app, _: app._cmd_subs()),
+        SlashCommand("skills",     "list all available skills (package + user + project)",
+                     lambda app, _: app._cmd_skills()),
     ]
     return {c.name: c for c in cmds}
 

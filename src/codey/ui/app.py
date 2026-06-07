@@ -338,6 +338,20 @@ class CodeyApp(App[None]):
             )
         self.run_worker(_open(), exclusive=True, group="subs-panel")
 
+    async def _cmd_skills(self) -> None:
+        names = self.session.skills.names()
+        if not names:
+            self._log_meta("(no skills loaded — drop a SKILL.md under "
+                           "~/.config/codey/skills/<name>/ or "
+                           "./.codey/skills/<name>/)")
+            return
+        width = max(len(n) for n in names)
+        for name in names:
+            s = self.session.skills.get(name)
+            tier = s.tier if s else "?"
+            desc = s.description if s else ""
+            self._log_meta(f"  [{tier:<7}] {name:<{width}}  {desc}")
+
     async def _cmd_profiles_list(self) -> None:
         active = self.agent.profile.name
         for name in sorted(self.cfg.profiles):
