@@ -174,6 +174,35 @@ def test_unknown_frontmatter_keys_ignored(tmp_path: Path):
     assert reg.get("compat") is not None
 
 
+def test_yaml_block_scalar_description(tmp_path: Path):
+    """Real-world Claude Code skills use `description: |` for multi-line text."""
+    user = tmp_path / "user"
+    d = user / "multi"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\n"
+        "name: multi\n"
+        "description: |\n"
+        "  First line of description.\n"
+        "  Second line.\n"
+        "  Third line, all part of description.\n"
+        "---\n"
+        "\n"
+        "body content here\n",
+        encoding="utf-8",
+    )
+    reg = SkillRegistry.scan(package_root=tmp_path / "nope",
+                             user_root=user, project_root=tmp_path / "nope2")
+    s = reg.get("multi")
+    assert s is not None
+    # All three lines folded into the description, joined with spaces.
+    assert "First line of description." in s.description
+    assert "Second line." in s.description
+    assert "Third line, all part of description." in s.description
+    # And the body is intact, not eaten by the parser.
+    assert s.body.strip() == "body content here"
+
+
 def test_missing_skill_md_skipped(tmp_path: Path):
     """A directory without SKILL.md inside the skills root is just ignored."""
     user = tmp_path / "user"
