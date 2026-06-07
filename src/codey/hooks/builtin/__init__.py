@@ -17,6 +17,7 @@ from ...tools.todo_write import TodoWriteTool
 from .audit_log import audit_log_hook
 from .otel import build_otel_hooks, otel_enabled
 from .permission import ApproveFn, permission_check_hook
+from .skill_render import build_skill_render_hook
 from .stop_logger import stop_logger_hook
 from .subagent_render import build_subagent_render_hooks
 from .todo_nag import build_todo_nag_hooks
@@ -79,6 +80,12 @@ def build_default_hooks(
     sub_pre, sub_post = build_subagent_render_hooks(meta_writer)
     reg.register(HookEvent.PRE_TOOL_USE,  sub_pre,  name="subagent_render_pre")
     reg.register(HookEvent.POST_TOOL_USE, sub_post, name="subagent_render_post")
+
+    # Skill-load meta line on the parent transcript: ↳ on PostToolUse for
+    # load_skill. Skipped on children (their meta_writer is a no-op anyway).
+    reg.register(HookEvent.POST_TOOL_USE,
+                 build_skill_render_hook(meta_writer),
+                 name="skill_render")
 
     # Todo hooks are only registered if the host supplied the tool + writer.
     # Headless / test callers can skip them.
@@ -144,6 +151,12 @@ def build_child_hooks(
         todos.
       - subagent_render: children can't spawn further children, so this would
         never fire — leave it off to keep the child registry minimal.
+      - skill_render: children share the parent's skill registry and could
+        call load_skill, but the meta line would be invisible (child's
+        meta_writer is the same parent writer but the line lands mid-parent-
+        turn with no context); the audit log captures every child load_skill
+        call regardless. Cleaner to leave it off, same reasoning as
+        stop_logger.
       - OTel: child-span support is a v2 follow-up; the current OTel hook
         is shaped around per-turn spans for a single agent.
 
