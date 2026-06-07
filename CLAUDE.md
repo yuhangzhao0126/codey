@@ -70,6 +70,7 @@ src/codey/
       todo_nag.py   #     Reminds the model to plan after quiet rounds
       todo_render.py#     Renders the todo list into the UI
       subagent_render.py # Pre+PostToolUse → ⏵/⏷ meta lines for spawn_agent
+      skill_render.py    # PostToolUse → ↳ meta line when load_skill returns
       otel.py       #     Opt-in OpenTelemetry tracing (--otel / CODEY_OTEL=1)
 
   permissions/      # "What is the agent allowed to do"
@@ -190,6 +191,7 @@ Key files:
   - `skills/registry.py`           — SkillRegistry.scan/get/list_meta
   - `skills/io.py`                 — parse_skill_md (no pyyaml dep)
   - `tools/load_skill.py`          — model-facing load tool
+  - `hooks/builtin/skill_render.py` — `↳ skill loaded: <name>` meta line
   - `prompt.py:_skills_layer`      — 4th prompt layer (auto-skipped if empty)
 
 Sub-agents inherit the same skill registry through the tool object and see
