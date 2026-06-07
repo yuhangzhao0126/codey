@@ -191,6 +191,7 @@ class CodeyApp(App[None]):
             tool=ctx_dict["tool"],
             command=ctx_dict["command"],
             reason=ctx_dict.get("reason", ""),
+            requester=ctx_dict.get("requester"),
         ))
         if ans in (None, "cancel", "n"):
             return Verdict(allowed=False)

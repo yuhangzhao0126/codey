@@ -30,21 +30,32 @@ class ApprovalScreen(ModalScreen[str]):
         background: $panel;
         border: round $warning;
     }
-    #approval-title  { color: $warning; padding-bottom: 1; }
-    #approval-cmd    { color: $text;    padding-bottom: 1; }
-    #approval-reason { color: $text-muted; padding-bottom: 1; }
-    #approval-help   { color: $text-muted; }
+    #approval-title    { color: $warning;    padding-bottom: 1; }
+    #approval-requester{ color: $accent;     padding-bottom: 1; }
+    #approval-cmd      { color: $text;       padding-bottom: 1; }
+    #approval-reason   { color: $text-muted; padding-bottom: 1; }
+    #approval-help     { color: $text-muted; }
     """
 
-    def __init__(self, *, tool: str, command: str, reason: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        tool: str,
+        command: str,
+        reason: str = "",
+        requester: str | None = None,
+    ) -> None:
         super().__init__()
         self.tool = tool
         self.command = command
         self.reason = reason
+        self.requester = requester
 
     def compose(self) -> ComposeResult:
         with Vertical(id="approval-box"):
             yield Static(f"⚠  agent wants to use tool [b]{self.tool}[/]", id="approval-title")
+            if self.requester:
+                yield Static(f"requested by: {self.requester}", id="approval-requester")
             yield Static(f"$ {self.command}", id="approval-cmd")
             if self.reason:
                 yield Static(f"reason: {self.reason}", id="approval-reason")

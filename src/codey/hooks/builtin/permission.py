@@ -53,6 +53,7 @@ def _summary(tool: str, args: dict[str, Any]) -> str:
 def permission_check_hook(
     engine: PermissionEngine,
     approve: ApproveFn | None,
+    requester: str | None = None,
 ) -> HookCallback:
     """Return a PreToolUse callback that consults the engine and possibly prompts.
 
@@ -60,6 +61,11 @@ def permission_check_hook(
     On Ask: invoke approve(); if denied, cancel with "error: user denied …";
             if remember, append a rule to the engine's user/project store.
     On Allow: HookResult() (let the dispatch proceed).
+
+    `requester` is an optional label (e.g. "sub-agent[2] \"investigate-db\"")
+    that gets stamped into the approval context so the modal can show which
+    actor is asking. Parent agents leave it None; sub-agents pass it in via
+    build_child_hooks.
     """
     async def hook(payload: dict[str, Any]) -> HookResult | None:
         tool = payload["tool"]
@@ -72,12 +78,15 @@ def permission_check_hook(
                 result=f"error: blocked by permission rule: {decision.reason}",
             )
         if isinstance(decision, Ask):
-            verdict = await _ask(approve, {
+            ctx = {
                 "tool": tool,
                 "command": _summary(tool, args),
                 "reason": decision.reason,
                 "suggested_pattern": suggest_pattern(tool, canonical),
-            })
+            }
+            if requester is not None:
+                ctx["requester"] = requester
+            verdict = await _ask(approve, ctx)
             if not verdict.allowed:
                 return HookResult(
                     cancel=True,

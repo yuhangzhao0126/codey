@@ -184,6 +184,7 @@ class Session:
             meta_writer=self._meta_writer,
             session_id=child_id,
             parent_session_id=self.session_id,
+            description=description,
         )
 
         child_system = build_subagent_system_prompt(description, cwd=self.workspace)

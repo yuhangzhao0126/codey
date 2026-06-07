@@ -477,6 +477,48 @@ def test_audit_log_emits_parent_session_id(tmp_path):
     assert lines[1]["session_id"] == "abc12345.sub.1"
 
 
+async def test_permission_hook_passes_requester_into_approval_ctx():
+    """If permission_check_hook is built with a requester string, every Ask
+    branch puts that string into the ctx dict handed to approve(). This is
+    what lets the TUI label the modal as 'sub-agent[2] "investigate-db"'."""
+    eng = PermissionEngine(mode=Mode.PARANOID)
+    captured: list[dict] = []
+
+    def fake_approve(ctx):
+        captured.append(ctx)
+        return Verdict(allowed=True)
+
+    hook = permission_check_hook(
+        engine=eng, approve=fake_approve,
+        requester='sub-agent[2] "investigate-db"',
+    )
+    await hook({"tool": "bash",
+                "arguments": {"command": "ls"},
+                "call_id": "x"})
+
+    assert len(captured) == 1
+    assert captured[0]["requester"] == 'sub-agent[2] "investigate-db"'
+
+
+async def test_permission_hook_omits_requester_when_not_set():
+    """Parent agents (no requester) must NOT inject the key — keeps the
+    modal layout identical to today for top-level calls."""
+    eng = PermissionEngine(mode=Mode.PARANOID)
+    captured: list[dict] = []
+
+    def fake_approve(ctx):
+        captured.append(ctx)
+        return Verdict(allowed=True)
+
+    hook = permission_check_hook(engine=eng, approve=fake_approve)
+    await hook({"tool": "bash",
+                "arguments": {"command": "ls"},
+                "call_id": "x"})
+
+    assert len(captured) == 1
+    assert "requester" not in captured[0]
+
+
 def test_build_child_hooks_shape():
     """Child hook registry: permission + audit only. NO Stop, NO todo, NO transcript."""
     from codey.hooks import HookEvent
@@ -498,11 +540,42 @@ def test_build_child_hooks_shape():
 
     # Permission first in PreToolUse, then audit_log_pre.
     assert names_by_event[HookEvent.PRE_TOOL_USE] == ["permission", "audit_log_pre"]
-    # PostToolUse: only audit_log_post (no transcript_post, no todo_render).
+    # PostToolUse: only audit_log_post (no transcript_post, no todo_render,
+    # no subagent_render_post — children can't spawn further children).
     assert names_by_event[HookEvent.POST_TOOL_USE] == ["audit_log_post"]
     # No Stop hooks (this is the load-bearing one: stop_logger would print
     # "[turn finished]" mid-parent-turn for every child).
     assert names_by_event[HookEvent.STOP] == []
     # No UserPromptSubmit hooks (children don't get free-form user prompts).
     assert names_by_event[HookEvent.USER_PROMPT_SUBMIT] == []
+
+
+async def test_build_child_hooks_propagates_requester_label():
+    """The child's permission hook must inject ctx['requester'] when the
+    description was supplied, so the approval modal can show which agent
+    is asking."""
+    from codey.hooks import HookEvent
+    from codey.hooks.builtin import build_child_hooks
+    from codey.permissions import PermissionEngine
+
+    eng = PermissionEngine(mode=Mode.PARANOID)
+    captured: list[dict] = []
+
+    def fake_approve(ctx):
+        captured.append(ctx)
+        return Verdict(allowed=True)
+
+    reg = build_child_hooks(
+        engine=eng, approve=fake_approve,
+        audit_log_path=None, meta_writer=lambda _: None,
+        session_id="abc.sub.3", parent_session_id="abc",
+        description="investigate-db",
+    )
+    await reg.trigger(HookEvent.PRE_TOOL_USE, {
+        "tool": "bash", "arguments": {"command": "ls"}, "call_id": "x",
+    })
+
+    assert captured
+    assert captured[0]["requester"] == 'sub-agent[3] "investigate-db"'
+
 

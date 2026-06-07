@@ -121,6 +121,7 @@ def build_child_hooks(
     meta_writer: MetaWriter,
     session_id: str,
     parent_session_id: str,
+    description: str | None = None,
 ) -> HookRegistry:
     """Curated hook registry for a sub-agent Agent.
 
@@ -141,15 +142,29 @@ def build_child_hooks(
       - todo_nag / todo_render: children don't have todo_write in their tool
         registry, so these would either no-op or double-render the parent's
         todos.
+      - subagent_render: children can't spawn further children, so this would
+        never fire — leave it off to keep the child registry minimal.
       - OTel: child-span support is a v2 follow-up; the current OTel hook
         is shaped around per-turn spans for a single agent.
 
     Every audit-log line emitted by a child carries `parent_session_id` so
     `jq` can reconstruct the parent→child causal chain.
+
+    `description` (optional) becomes the requester label on every approval
+    modal this child triggers, e.g. 'sub-agent[2] "investigate-db"'. The
+    sub-index is parsed from `session_id` (format: '<parent>.sub.<N>').
     """
+    requester: str | None = None
+    if description is not None:
+        # session_id is "<parent>.sub.<N>"; extract N for the user-visible label.
+        suffix = session_id.rsplit(".sub.", 1)
+        idx = suffix[1] if len(suffix) == 2 else "?"
+        requester = f'sub-agent[{idx}] "{description}"'
+
     reg = HookRegistry(error_sink=meta_writer)
     reg.register(HookEvent.PRE_TOOL_USE,
-                 permission_check_hook(engine=engine, approve=approve),
+                 permission_check_hook(engine=engine, approve=approve,
+                                       requester=requester),
                  name="permission")
     reg.register(HookEvent.PRE_TOOL_USE,
                  audit_log_hook("PreToolUse", log_path=audit_log_path,
