@@ -18,6 +18,7 @@ from .audit_log import audit_log_hook
 from .otel import build_otel_hooks, otel_enabled
 from .permission import ApproveFn, permission_check_hook
 from .stop_logger import stop_logger_hook
+from .subagent_render import build_subagent_render_hooks
 from .todo_nag import build_todo_nag_hooks
 from .todo_render import TodoWriter, todo_render_hook
 from .transcript import post_tool_render_hook, pre_tool_render_hook
@@ -72,6 +73,12 @@ def build_default_hooks(
     reg.register(HookEvent.STOP,
                  stop_logger_hook(meta_writer),
                  name="stop_logger")
+
+    # Sub-agent meta lines on the parent transcript: ⏵ on spawn_agent
+    # PreToolUse, ⏷ on PostToolUse. Skipped on children (see build_child_hooks).
+    sub_pre, sub_post = build_subagent_render_hooks(meta_writer)
+    reg.register(HookEvent.PRE_TOOL_USE,  sub_pre,  name="subagent_render_pre")
+    reg.register(HookEvent.POST_TOOL_USE, sub_post, name="subagent_render_post")
 
     # Todo hooks are only registered if the host supplied the tool + writer.
     # Headless / test callers can skip them.

@@ -28,7 +28,7 @@ MAX_OUTPUT_CHARS = 10_000
 
 @dataclass
 class SpawnAgentTool:
-    session_provider: Callable[[], "Session"] = None  # set at registration
+    session_provider: Callable[[], "Session"] = None
 
     name: str = "spawn_agent"
     description: str = (
