@@ -1,13 +1,31 @@
 """Tests for reactive_compact — the post-413 recovery path."""
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from codey.config import Profile
 from codey.context import reactive as reactive_mod
 from codey.core.messages import Message
 
-from tests.test_context_llm import FakeClient
+
+class _FakeChatCompletions:
+    def __init__(self, *, response_text: str):
+        self.response_text = response_text
+
+    async def create(self, **kwargs):
+        return type("R", (), {
+            "choices": [type("C", (), {
+                "message": type("M", (), {"content": self.response_text})()
+            })()]
+        })()
+
+
+class FakeClient:
+    def __init__(self, *, response_text: str):
+        self.chat = type("Chat", (), {})()
+        self.chat.completions = _FakeChatCompletions(response_text=response_text)
 
 
 def _profile():
