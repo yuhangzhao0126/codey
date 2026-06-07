@@ -25,9 +25,14 @@ from ..hooks import HookRegistry
 from ..hooks.builtin import build_default_hooks
 from ..permissions import PermissionEngine
 from ..prompt import build_system_prompt
+from ..skills import SkillRegistry
 from ..tools import build_default_registry
 from .agent import ToolRegistry
 from .turn import Agent
+
+
+_PACKAGE_SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills_bundled"
+_USER_SKILLS_DIR    = Path.home() / ".config" / "codey" / "skills"
 
 
 class UISinks(Protocol):
@@ -90,6 +95,7 @@ class Session:
     hooks: HookRegistry
     tools: ToolRegistry
     session_id: str
+    skills: SkillRegistry = field(default_factory=SkillRegistry)
     subagent_recorder: SubAgentRecorder = field(default_factory=SubAgentRecorder)
     _sub_counter: int = 0
     _ui_approve: Any = None
@@ -110,6 +116,11 @@ class Session:
         ws = (workspace or Path.cwd()).resolve()
         engine = PermissionEngine.load(workspace=ws)
         tools = build_default_registry()
+        skills = SkillRegistry.scan(
+            package_root=_PACKAGE_SKILLS_DIR,
+            user_root=_USER_SKILLS_DIR,
+            project_root=ws / ".codey" / "skills",
+        )
         session_id = uuid.uuid4().hex[:8]
         otel_cfg: dict | None = None
         if otel_enabled:
@@ -130,16 +141,19 @@ class Session:
         )
         agent = Agent(
             profile=profile,
-            system_prompt=build_system_prompt(),
+            system_prompt=build_system_prompt(skills=skills),
             tools=tools,
             hooks=hooks,
         )
         sess = cls(profile=profile, workspace=ws, cfg=cfg, agent=agent,
                    engine=engine, hooks=hooks, tools=tools,
-                   session_id=session_id)
+                   session_id=session_id, skills=skills)
         # Capture for build_child_agent (need these to build child hooks).
         sess._ui_approve = ui_sinks.approve
         sess._meta_writer = ui_sinks.meta_writer
+
+        from ..tools.load_skill import LoadSkillTool
+        tools.register(LoadSkillTool(skills=skills))
 
         from ..tools.spawn_agent import SpawnAgentTool
         tools.register(SpawnAgentTool(session_provider=lambda: sess))
@@ -187,7 +201,9 @@ class Session:
             description=description,
         )
 
-        child_system = build_subagent_system_prompt(description, cwd=self.workspace)
+        child_system = build_subagent_system_prompt(
+            description, cwd=self.workspace, skills=self.skills,
+        )
 
         child = Agent(
             profile=child_profile,
