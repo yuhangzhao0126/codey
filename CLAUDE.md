@@ -83,10 +83,18 @@ src/codey/
     bash.py read_file.py list_dir.py grep.py
     write_file.py apply_edit.py todo_write.py
     spawn_agent.py  #   Spawn an isolated sub-agent (depth-1 only).
+    load_skill.py   #   Fetch one skill's body on demand.
+
+  skills/           # SKILL.md loader (Claude-Code-compatible subset)
+    models.py       #   Skill dataclass + Tier literal
+    io.py           #   parse_skill_md() — frontmatter parser
+    registry.py     #   SkillRegistry.scan/get/list_meta
+  skills_bundled/   # Package-bundled default skills (empty in v1)
 
   config.py         # Profile loading from ~/.config/codey/config.toml
-  prompt.py         # 3-layer system prompt: package default → user
-                    # → ./codey.md (this file)
+  prompt.py         # 4-layer system prompt: package default → user
+                    # → ./codey.md → skills index (auto-injected when
+                    # SkillRegistry is non-empty)
   prompts/system.md   # default system prompt (always loaded)
   prompts/subagent.md # default sub-agent system prompt (children only)
 
@@ -154,6 +162,39 @@ reconstructs the parent→child causal chain.
 
 Approval modals triggered by a child include a `requester` line so the user
 sees which sub-agent is asking (e.g. `sub-agent[2] "investigate-db"`).
+
+### Skills
+
+The model can extend itself at runtime by loading skills — markdown files
+with YAML frontmatter, modeled on Claude Code's SKILL.md format. The
+`name + description` of every discovered skill is in the system prompt
+(via the 4th prompt layer); only the body is loaded on demand, when the
+model calls the `load_skill` tool. This keeps a large library of procedures
+available at near-zero token cost until one is actually needed.
+
+Discovery: three tiers, scanned once at `Session.build`, project beats
+user beats package:
+
+  - `src/codey/skills_bundled/<name>/SKILL.md`  (package — ships with codey)
+  - `~/.config/codey/skills/<name>/SKILL.md`     (user — applies everywhere)
+  - `<workspace>/.codey/skills/<name>/SKILL.md`  (project — applies in this repo)
+
+Override on name collision is silent — the winner-tier skill loads, the
+loser tier writes a `skill_override` line to `~/.cache/codey/calls.jsonl`
+(same audit log the audit_log hook uses). Malformed skills (missing
+description, bad frontmatter, etc.) are skipped + logged with
+`skill_invalid` — the scan never raises.
+
+Key files:
+
+  - `skills/registry.py`           — SkillRegistry.scan/get/list_meta
+  - `skills/io.py`                 — parse_skill_md (no pyyaml dep)
+  - `tools/load_skill.py`          — model-facing load tool
+  - `prompt.py:_skills_layer`      — 4th prompt layer (auto-skipped if empty)
+
+Sub-agents inherit the same skill registry through the tool object and see
+the same skills index in their system prompt — `load_skill` is one of the
+tools children inherit by default.
 
 ### Event stream
 
@@ -259,6 +300,7 @@ that should exist. Don't create plan / design / summary files.
 | A new tool | `src/codey/tools/<name>.py` + register in `tools/__init__.py` |
 | A new hook (observe/decide/rewrite at a known point) | `src/codey/hooks/builtin/<name>.py` + register in `hooks/builtin/__init__.py` |
 | A new built-in permission rule | `BUILTIN_DENY` or `BUILTIN_ALLOW` in `permissions/rules.py` |
+| A new built-in skill | `src/codey/skills_bundled/<name>/SKILL.md` (ships with the package) |
 | A new slash command | `ui/slash_commands.py:_build_slash_commands()` |
 | A new test | `tests/test_<area>.py`, async-style, using existing fixtures in `tests/conftest.py` |
 | New CLI flag | `app.py:main()` argparse + thread through to `Session.build` / `CodeyApp` |
