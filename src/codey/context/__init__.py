@@ -16,3 +16,24 @@ Failure path:
 See docs/2026-06-07-context-management-design.md for the full spec.
 """
 from __future__ import annotations
+
+from .errors import PromptTooLongError, sniff
+from .pipeline import (
+    CHILD_THRESHOLDS,
+    PARENT_THRESHOLDS,
+    Thresholds,
+    run_proactive,
+    run_proactive_force_summary,
+    run_reactive,
+)
+
+__all__ = [
+    "PromptTooLongError",
+    "sniff",
+    "Thresholds",
+    "PARENT_THRESHOLDS",
+    "CHILD_THRESHOLDS",
+    "run_proactive",
+    "run_proactive_force_summary",
+    "run_reactive",
+]
