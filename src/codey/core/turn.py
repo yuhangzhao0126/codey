@@ -29,7 +29,9 @@ from typing import Any, AsyncIterator, Callable
 
 from openai import AsyncOpenAI
 
+from .. import context as context_pipeline
 from ..config import Profile
+from ..context.errors import PromptTooLongError
 from ..hooks import HookEvent, HookRegistry
 from . import history as history_mod
 from . import streaming as streaming_mod
@@ -117,18 +119,56 @@ class Agent:
         assistant_text_parts: list[str] = []
         stop_reason: str = "stop"
         stop_error: str | None = None
+        reactive_retries = 0
+        last_round_tool_idxs: list[int] = []
         try:
             for round_idx in range(MAX_ROUNDS):
+                try:
+                    await context_pipeline.run_proactive(
+                        history=self.history,
+                        profile=self.profile,
+                        session_id=self.session_id,
+                        last_round_tool_idxs=last_round_tool_idxs,
+                        meta=self._meta,
+                        client=self._client,
+                        recent_files=list(self._recent_reads),
+                    )
+                except Exception as e:  # noqa: BLE001
+                    # Pipeline errors are never fatal to the turn.
+                    if self._meta:
+                        self._meta(f"[ctx: pipeline error: {type(e).__name__}: {e}]")
+
                 yield RoundStarted(round=round_idx)
 
                 text, tool_calls = "", []
-                async for ev in self._stream_one_round():
-                    if isinstance(ev, AssistantTextDelta):
-                        text += ev.text
-                        yield ev
-                    elif isinstance(ev, streaming_mod.RoundDone):
-                        tool_calls = ev.tool_calls
-                        break
+                try:
+                    async for ev in self._stream_one_round():
+                        if isinstance(ev, AssistantTextDelta):
+                            text += ev.text
+                            yield ev
+                        elif isinstance(ev, streaming_mod.RoundDone):
+                            tool_calls = ev.tool_calls
+                            break
+                except PromptTooLongError as e:
+                    if reactive_retries < 1:
+                        try:
+                            await context_pipeline.run_reactive(
+                                history=self.history,
+                                profile=self.profile,
+                                session_id=self.session_id,
+                                meta=self._meta,
+                                client=self._client,
+                                recent_files=list(self._recent_reads),
+                            )
+                        except Exception as inner:  # noqa: BLE001
+                            if self._meta:
+                                self._meta(f"[ctx: reactive failed: {type(inner).__name__}: {inner}]")
+                            raise e
+                        reactive_retries += 1
+                        # Skip the rest of this round body; the outer for-loop
+                        # will start a fresh round with the compacted history.
+                        continue
+                    raise
 
                 # Persist this round's assistant message exactly as the API saw it.
                 assistant_text_parts.append(text)
@@ -198,6 +238,20 @@ class Agent:
                 for events in per_call_events:
                     for ev in events:
                         yield ev
+
+                # Record this round's tool-message indices for the next
+                # round's tool_result_budget check.
+                round_call_ids = {c["id"] for c in tool_calls if c.get("id")}
+                last_round_tool_idxs = [
+                    i for i in range(len(self.history))
+                    if self.history[i].role == "tool" and
+                       self.history[i].tool_call_id in round_call_ids
+                ]
+
+                # If the model's only tool call was `compact`, end the turn so
+                # the next user prompt sees the compacted context.
+                if len(tool_calls) == 1 and tool_calls[0].get("function", {}).get("name") == "compact":
+                    break
             else:
                 stop_reason = "error"
                 stop_error = f"hit MAX_ROUNDS ({MAX_ROUNDS})"
