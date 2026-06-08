@@ -27,6 +27,7 @@ from ..permissions import PermissionEngine
 from ..prompt import build_system_prompt
 from ..skills import SkillRegistry
 from ..tools import build_default_registry
+from .. import context as _context_pipeline
 from .agent import ToolRegistry
 from .turn import Agent
 
@@ -223,6 +224,7 @@ class Session:
             session_id=child_id,
             _meta=self._meta_writer,
             _recent_reads=child_recent_reads,
+            context_thresholds=_context_pipeline.CHILD_THRESHOLDS,
         )
         return child, child_id
 

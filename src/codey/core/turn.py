@@ -61,6 +61,9 @@ class Agent:
     session_id: str = ""
     _meta: Callable[[str], None] | None = None
     _recent_reads: "deque[Path]" = field(default_factory=lambda: deque(maxlen=5))
+    context_thresholds: "context_pipeline.Thresholds" = field(
+        default_factory=lambda: context_pipeline.PARENT_THRESHOLDS
+    )
     _client: AsyncOpenAI = field(init=False)
 
     def __post_init__(self) -> None:
@@ -132,6 +135,7 @@ class Agent:
                         meta=self._meta,
                         client=self._client,
                         recent_files=list(self._recent_reads),
+                        thresholds=self.context_thresholds,
                     )
                 except Exception as e:  # noqa: BLE001
                     # Pipeline errors are never fatal to the turn.

@@ -62,3 +62,11 @@ def test_recent_reads_hook_registered_in_default_hooks(temp_config, tmp_path: Pa
     sess = Session.build(profile_arg="alpha", ui_sinks=FakeSinks(), workspace=tmp_path)
     names = [h.name for h in sess.hooks.list()]
     assert "recent_reads" in names
+
+
+def test_child_uses_child_thresholds(temp_config, tmp_path: Path):
+    from codey import context as context_pipeline
+    sess = Session.build(profile_arg="alpha", ui_sinks=FakeSinks(), workspace=tmp_path)
+    child, _ = sess.build_child_agent(description="probe")
+    assert child.context_thresholds is context_pipeline.CHILD_THRESHOLDS
+    assert sess.agent.context_thresholds is context_pipeline.PARENT_THRESHOLDS
