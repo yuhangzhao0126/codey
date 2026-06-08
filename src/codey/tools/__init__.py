@@ -10,6 +10,7 @@ from __future__ import annotations
 from ..core import ToolRegistry
 from .apply_edit import ApplyEditTool
 from .bash import ApproveFn, BashTool, Verdict
+from .compact import CompactTool
 from .grep import GrepTool
 from .list_dir import ListDirTool
 from .read_file import ReadFileTool
@@ -36,6 +37,7 @@ __all__ = [
     "ApplyEditTool",
     "ApproveFn",
     "BashTool",
+    "CompactTool",
     "GrepTool",
     "ListDirTool",
     "ReadFileTool",
