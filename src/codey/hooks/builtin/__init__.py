@@ -17,6 +17,7 @@ from ...tools.todo_write import TodoWriteTool
 from .audit_log import audit_log_hook
 from .otel import build_otel_hooks, otel_enabled
 from .permission import ApproveFn, permission_check_hook
+from .recent_reads import build_recent_reads_hook
 from .skill_render import build_skill_render_hook
 from .stop_logger import stop_logger_hook
 from .subagent_render import build_subagent_render_hooks
@@ -42,6 +43,7 @@ def build_default_hooks(
     todo_writer: TodoWriter | None = None,
     session_id: str | None = None,
     otel: dict | None = None,
+    recent_reads_deque: Any | None = None,
 ) -> HookRegistry:
     reg = HookRegistry(error_sink=meta_writer)
 
@@ -87,6 +89,14 @@ def build_default_hooks(
                  build_skill_render_hook(meta_writer),
                  name="skill_render")
 
+    # recent_reads records every successful read_file path onto the agent's
+    # deque so llm_compact_history can re-read the most recent files at
+    # compaction time. Registered only when the host supplied a deque.
+    if recent_reads_deque is not None:
+        reg.register(HookEvent.POST_TOOL_USE,
+                     build_recent_reads_hook(recent_reads_deque),
+                     name="recent_reads")
+
     # Todo hooks are only registered if the host supplied the tool + writer.
     # Headless / test callers can skip them.
     if todo_tool is not None and todo_writer is not None:
@@ -129,6 +139,7 @@ def build_child_hooks(
     session_id: str,
     parent_session_id: str,
     description: str | None = None,
+    recent_reads_deque: Any | None = None,
 ) -> HookRegistry:
     """Curated hook registry for a sub-agent Agent.
 
@@ -189,6 +200,10 @@ def build_child_hooks(
                                 session_id=session_id,
                                 parent_session_id=parent_session_id),
                  name="audit_log_post")
+    if recent_reads_deque is not None:
+        reg.register(HookEvent.POST_TOOL_USE,
+                     build_recent_reads_hook(recent_reads_deque),
+                     name="recent_reads")
     return reg
 
 

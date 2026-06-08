@@ -129,6 +129,7 @@ class Session:
                 "model": profile.model,
                 "base_url": profile.base_url,
             }
+        recent_reads: deque = deque(maxlen=5)
         hooks = build_default_hooks(
             engine=engine,
             approve=ui_sinks.approve,
@@ -138,12 +139,16 @@ class Session:
             todo_writer=ui_sinks.todo_writer,
             session_id=session_id,
             otel=otel_cfg,
+            recent_reads_deque=recent_reads,
         )
         agent = Agent(
             profile=profile,
             system_prompt=build_system_prompt(skills=skills),
             tools=tools,
             hooks=hooks,
+            session_id=session_id,
+            _meta=ui_sinks.meta_writer,
+            _recent_reads=recent_reads,
         )
         sess = cls(profile=profile, workspace=ws, cfg=cfg, agent=agent,
                    engine=engine, hooks=hooks, tools=tools,
@@ -157,6 +162,9 @@ class Session:
 
         from ..tools.spawn_agent import SpawnAgentTool
         tools.register(SpawnAgentTool(session_provider=lambda: sess))
+
+        from ..tools.compact import CompactTool
+        tools.register(CompactTool(session_provider=lambda: sess))
         return sess
 
     async def swap_profile(self, name: str) -> Profile:
@@ -185,12 +193,13 @@ class Session:
         self._sub_counter += 1
         child_id = f"{self.session_id}.sub.{self._sub_counter}"
 
-        EXCLUDED_FROM_CHILD = {"spawn_agent", "todo_write"}
+        EXCLUDED_FROM_CHILD = {"spawn_agent", "todo_write", "compact"}
         child_tools = ToolRegistry(tools={
             n: t for n, t in self.tools.tools.items()
             if n not in EXCLUDED_FROM_CHILD
         })
 
+        child_recent_reads: deque = deque(maxlen=5)
         child_hooks = build_child_hooks(
             engine=self.engine,
             approve=self._ui_approve,
@@ -199,6 +208,7 @@ class Session:
             session_id=child_id,
             parent_session_id=self.session_id,
             description=description,
+            recent_reads_deque=child_recent_reads,
         )
 
         child_system = build_subagent_system_prompt(
@@ -210,6 +220,9 @@ class Session:
             system_prompt=child_system,
             tools=child_tools,
             hooks=child_hooks,
+            session_id=child_id,
+            _meta=self._meta_writer,
+            _recent_reads=child_recent_reads,
         )
         return child, child_id
 
