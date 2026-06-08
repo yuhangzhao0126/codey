@@ -92,6 +92,18 @@ src/codey/
     registry.py     #   SkillRegistry.scan/get/list_meta
   skills_bundled/   # Package-bundled default skills (empty in v1)
 
+  context/          # 4-step proactive compaction + reactive retry path
+    pipeline.py     #   orchestrator: run_proactive / run_proactive_force_summary
+                    #   / run_reactive + PARENT/CHILD Thresholds
+    budget.py       #   step 1: tool_result_budget — spill big tool outputs
+    snip.py         #   step 2: snip_compact — middle-trim past 50 messages
+    micro.py        #   step 3: micro_compact — placeholder old tool results
+    llm.py          #   step 4: llm_compact_history — single-call summary
+    reactive.py     #   failure path: aggressive summary+tail on PromptTooLong
+    tokens.py       #   chars/4 estimator
+    transcripts.py  #   ~/.cache/codey/transcripts/<sid>/ disk I/O
+    errors.py       #   PromptTooLongError + provider error sniffer
+
   config.py         # Profile loading from ~/.config/codey/config.toml
   prompt.py         # 4-layer system prompt: package default → user
                     # → ./codey.md → skills index (auto-injected when
@@ -198,6 +210,73 @@ Sub-agents inherit the same skill registry through the tool object and see
 the same skills index in their system prompt — `load_skill` is one of the
 tools children inherit by default.
 
+### Context management
+
+`src/codey/context/` runs a 4-step proactive compaction pipeline at the
+top of every model round inside `Agent.run()` so long conversations don't
+blow past the model's context window. The same package also implements a
+reactive recovery path that catches `PromptTooLongError` from the streaming
+layer and retries the round once with an aggressive summary+tail compact.
+
+The four proactive steps, in order (each is a no-op if its threshold isn't
+met):
+
+  1. `tool_result_budget` — if last round's tool outputs > 200 KB total,
+     persist each body to disk under
+     `~/.cache/codey/transcripts/<session_id>/tool_results/` and replace
+     the in-history message with a `<persisted output>` stub.
+  2. `snip_compact` — past 50 non-system messages, keep first 5 + last 45,
+     drop the middle, insert a synthetic gap marker. Pair-aware: if the
+     cut lands inside a `tool_call ↔ tool_result` group, the boundary
+     expands outward so no orphan tool messages survive.
+  3. `micro_compact` — placeholder all but the last 5 tool-result bodies
+     so old `read_file`/`bash` outputs stop bloating the prompt.
+  4. `llm_compact_history` — single non-streaming call to the same model
+     to summarize prior history; replaces conversation body with one
+     synthetic user message containing the summary + a re-read of the 5
+     most-recent files the agent looked at. Only fires when
+     `estimate(history) > profile.context_window - profile.max_output_tokens -
+     profile.compact_headroom`.
+
+Two user-facing triggers force step 4 immediately, regardless of token
+budget: the `/compact` slash command and a model-callable `compact` tool.
+A lone `compact` tool call ends the current turn so the next user prompt
+sees the compacted context.
+
+Sub-agents use tighter `CHILD_THRESHOLDS` (snip at 30 msgs, keep head 3 /
+tail 25) so a focused investigation hits the trim path sooner than the
+long-running parent conversation. Children do NOT get the `compact` tool —
+they inherit the proactive pipeline only.
+
+Key files:
+
+  - `context/pipeline.py`        — `run_proactive` / `run_proactive_force_summary`
+                                    / `run_reactive`; `Thresholds` dataclass +
+                                    `PARENT_THRESHOLDS` / `CHILD_THRESHOLDS`
+  - `context/budget.py` `snip.py` `micro.py` `llm.py` `reactive.py` — one step each
+  - `context/tokens.py`          — chars/4 estimator
+  - `context/transcripts.py`     — `~/.cache/codey/transcripts/<sid>/` writers
+                                    (persisted tool results + pre-compact JSON snapshots)
+  - `context/errors.py`          — `PromptTooLongError` + provider error sniffer
+                                    (handles OpenAI `context_length_exceeded`,
+                                    Anthropic "prompt is too long", bare HTTP 413)
+  - `core/streaming.py`          — catches provider errors and re-raises as
+                                    `PromptTooLongError` so the reactive path
+                                    has a single exception type to handle
+  - `core/turn.py:Agent.run`     — invokes the pipeline at the top of each
+                                    round; reactive retry capped at 1 per turn;
+                                    break-on-compact handling
+  - `core/turn.py:Agent.compact_now` — the `/compact` slash handler
+  - `tools/compact.py`           — the model-callable `compact` tool
+  - `hooks/builtin/recent_reads.py` — PostToolUse hook that records
+                                    successful `read_file` paths onto the
+                                    agent's deque (the source for
+                                    `llm_compact_history`'s file re-read)
+
+Pipeline errors are never fatal: any exception inside the proactive call is
+swallowed with a `[ctx: pipeline error: …]` meta line so context management
+can never break a turn that would otherwise have worked.
+
 ### Event stream
 
 `Agent.run()` is an `AsyncIterator[Event]`. Don't expose `print()` from the
@@ -301,6 +380,7 @@ that should exist. Don't create plan / design / summary files.
 |---|---|
 | A new tool | `src/codey/tools/<name>.py` + register in `tools/__init__.py` |
 | A new hook (observe/decide/rewrite at a known point) | `src/codey/hooks/builtin/<name>.py` + register in `hooks/builtin/__init__.py` |
+| A new context-pipeline step | `src/codey/context/<name>.py` + chain it in `pipeline.py:run_proactive` |
 | A new built-in permission rule | `BUILTIN_DENY` or `BUILTIN_ALLOW` in `permissions/rules.py` |
 | A new built-in skill | `src/codey/skills_bundled/<name>/SKILL.md` (ships with the package) |
 | A new slash command | `ui/slash_commands.py:_build_slash_commands()` |
