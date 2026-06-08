@@ -323,6 +323,19 @@ class Agent:
         except Exception:  # noqa: BLE001
             pass
 
+    async def compact_now(self) -> None:
+        """Force-compact history right now. Used by the /compact slash command."""
+        await context_pipeline.run_proactive_force_summary(
+            history=self.history,
+            profile=self.profile,
+            session_id=self.session_id,
+            meta=self._meta,
+            client=self._client,
+            recent_files=list(self._recent_reads),
+        )
+        if self._meta:
+            self._meta("[ctx: forced compaction by /compact]")
+
     # -- internals --
 
     @staticmethod

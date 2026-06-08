@@ -44,6 +44,8 @@ def build_slash_commands() -> dict[str, SlashCommand]:
                      lambda app, _: app._cmd_subs()),
         SlashCommand("skills",     "list all available skills (package + user + project)",
                      lambda app, _: app._cmd_skills()),
+        SlashCommand("compact",    "summarize history into a single message; preserves system prompt",
+                     lambda app, _: app._cmd_compact()),
     ]
     return {c.name: c for c in cmds}
 

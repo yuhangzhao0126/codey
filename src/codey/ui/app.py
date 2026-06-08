@@ -330,6 +330,12 @@ class CodeyApp(App[None]):
         self.agent.reset()
         self._log_meta("(history cleared)")
 
+    async def _cmd_compact(self) -> None:
+        try:
+            await self.session.agent.compact_now()
+        except Exception as e:  # noqa: BLE001
+            self._log_error(f"/compact failed: {type(e).__name__}: {e}")
+
     async def _cmd_subs(self) -> None:
         """Open the /subs panel modal (worker context required by push_screen_wait)."""
         async def _open() -> None:
