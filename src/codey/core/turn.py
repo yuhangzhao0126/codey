@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from pathlib import Path
+from typing import Any, AsyncIterator, Callable
 
 from openai import AsyncOpenAI
 
@@ -54,6 +56,9 @@ class Agent:
     tools: ToolRegistry = field(default_factory=ToolRegistry)
     hooks: HookRegistry = field(default_factory=HookRegistry)
     history: list[Message] = field(default_factory=list)
+    session_id: str = ""
+    _meta: Callable[[str], None] | None = None
+    _recent_reads: "deque[Path]" = field(default_factory=lambda: deque(maxlen=5))
     _client: AsyncOpenAI = field(init=False)
 
     def __post_init__(self) -> None:

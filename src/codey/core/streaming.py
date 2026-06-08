@@ -13,6 +13,7 @@ from typing import Any, AsyncIterator
 from openai import AsyncOpenAI
 
 from ..config import Profile
+from ..context.errors import PromptTooLongError, sniff as _sniff_provider_error
 from .events import AssistantTextDelta
 from .messages import Message
 
@@ -43,30 +44,44 @@ async def stream_one_round(
     if tool_schemas:
         kwargs["tools"] = tool_schemas
 
-    stream = await client.chat.completions.create(**kwargs)
+    try:
+        stream = await client.chat.completions.create(**kwargs)
+    except BaseException as exc:
+        sniffed = _sniff_provider_error(exc)
+        if sniffed is not None:
+            raise sniffed from exc
+        raise
 
     # tool_calls stream in fragments keyed by `index`; reassemble here.
     partial: dict[int, dict[str, Any]] = {}
 
-    async for chunk in stream:
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta
+    try:
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
 
-        if delta.content:
-            yield AssistantTextDelta(text=delta.content)
+            if delta.content:
+                yield AssistantTextDelta(text=delta.content)
 
-        for tc in delta.tool_calls or []:
-            slot = partial.setdefault(
-                tc.index,
-                {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
-            )
-            if tc.id:
-                slot["id"] = tc.id
-            if tc.function and tc.function.name:
-                slot["function"]["name"] = tc.function.name
-            if tc.function and tc.function.arguments:
-                slot["function"]["arguments"] += tc.function.arguments
+            for tc in delta.tool_calls or []:
+                slot = partial.setdefault(
+                    tc.index,
+                    {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                )
+                if tc.id:
+                    slot["id"] = tc.id
+                if tc.function and tc.function.name:
+                    slot["function"]["name"] = tc.function.name
+                if tc.function and tc.function.arguments:
+                    slot["function"]["arguments"] += tc.function.arguments
+    except PromptTooLongError:
+        raise
+    except BaseException as exc:
+        sniffed = _sniff_provider_error(exc)
+        if sniffed is not None:
+            raise sniffed from exc
+        raise
 
     tool_calls = [partial[i] for i in sorted(partial)] if partial else []
     yield RoundDone(tool_calls=tool_calls)
