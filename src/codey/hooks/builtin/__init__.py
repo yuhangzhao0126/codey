@@ -15,6 +15,7 @@ from ..registry import HookEvent, HookRegistry
 from ...permissions import PermissionEngine
 from ...tools.todo_write import TodoWriteTool
 from .audit_log import audit_log_hook
+from .memory_extract import build_memory_extract_hook
 from .otel import build_otel_hooks, otel_enabled
 from .permission import ApproveFn, permission_check_hook
 from .recent_reads import build_recent_reads_hook
@@ -44,6 +45,7 @@ def build_default_hooks(
     session_id: str | None = None,
     otel: dict | None = None,
     recent_reads_deque: Any | None = None,
+    memory_extract_factory: Callable[[], Any] | None = None,
 ) -> HookRegistry:
     reg = HookRegistry(error_sink=meta_writer)
 
@@ -126,6 +128,12 @@ def build_default_hooks(
         reg.register(HookEvent.PRE_TOOL_USE,       cbs["pre_tool_use"],       name="otel_tool_pre")
         reg.register(HookEvent.POST_TOOL_USE,      cbs["post_tool_use"],      name="otel_tool_post")
         reg.register(HookEvent.STOP,               cbs["stop"],               name="otel_turn_stop")
+
+    # Memory extract: parent-only, registered last so other Stop hooks
+    # (stop_logger, todo_nag_stop, otel_turn_stop) run first.
+    if memory_extract_factory is not None:
+        cb = memory_extract_factory()
+        reg.register(HookEvent.STOP, cb, name="memory_extract")
 
     return reg
 
@@ -211,6 +219,7 @@ __all__ = [
     "build_default_hooks",
     "build_child_hooks",
     "audit_log_hook",
+    "build_memory_extract_hook",
     "build_otel_hooks",
     "otel_enabled",
     "permission_check_hook",

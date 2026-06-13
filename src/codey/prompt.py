@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .memory import MemoryRegistry
     from .skills import SkillRegistry
 
 USER_PROMPT_PATH = Path.home() / ".config" / "codey" / "system.md"
@@ -44,11 +45,19 @@ def _skills_layer(skills: "SkillRegistry | None") -> str | None:
     return meta or None
 
 
+def _memory_layer(memory: "MemoryRegistry | None") -> str | None:
+    if memory is None:
+        return None
+    meta = memory.list_meta().strip()
+    return meta or None
+
+
 def build_system_prompt(
     cwd: Path | None = None,
     skills: "SkillRegistry | None" = None,
+    memory: "MemoryRegistry | None" = None,
 ) -> str:
-    """Concatenate default + user + project + skills layers, separated by blank lines."""
+    """Concatenate default + user + project + skills + memory layers, separated by blank lines."""
     project_path = (cwd or Path.cwd()) / PROJECT_PROMPT_PATH
 
     layers = [
@@ -56,6 +65,7 @@ def build_system_prompt(
         _read_if_exists(USER_PROMPT_PATH),
         _read_if_exists(project_path),
         _skills_layer(skills),
+        _memory_layer(memory),
     ]
     return "\n\n".join(layer for layer in layers if layer)
 
@@ -64,20 +74,10 @@ def build_subagent_system_prompt(
     description: str,
     cwd: Path | None = None,
     skills: "SkillRegistry | None" = None,
+    memory: "MemoryRegistry | None" = None,
 ) -> str:
-    """System prompt for a sub-agent.
-
-    Layers, in order:
-      1. default sub-agent prompt — src/codey/prompts/subagent.md
-      2. a one-line description of THIS sub-agent's task
-      3. user overlay — ~/.config/codey/system.md (same one the parent uses)
-      4. project overlay — ./codey.md (same one the parent uses)
-      5. skills index — same registry the parent sees, so children can load too
-
-    Layers 1 and 2 are always present. Missing 3, 4, 5 are skipped silently.
-    Per-repo conventions in codey.md apply to children too — sub-agents work
-    on the same codebase under the same rules.
-    """
+    """System prompt for a sub-agent. Layers: default sub-agent → task line
+    → user overlay → project overlay → skills index → memory index."""
     default = files("codey.prompts").joinpath("subagent.md").read_text(encoding="utf-8").strip()
     task_line = f"Your task (from the parent agent): {description.strip()}"
     project_path = (cwd or Path.cwd()) / PROJECT_PROMPT_PATH
@@ -88,5 +88,6 @@ def build_subagent_system_prompt(
         _read_if_exists(USER_PROMPT_PATH),
         _read_if_exists(project_path),
         _skills_layer(skills),
+        _memory_layer(memory),
     ]
     return "\n\n".join(layer for layer in layers if layer)

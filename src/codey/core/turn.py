@@ -48,6 +48,9 @@ from .events import (
 )
 from .messages import Message
 
+if False:  # pragma: no cover - TYPE_CHECKING guard
+    from ..session_store import SessionStore  # noqa: F401
+
 MAX_ROUNDS = 10  # safety cap on tool-use loops
 
 
@@ -64,11 +67,50 @@ class Agent:
     context_thresholds: "context_pipeline.Thresholds" = field(
         default_factory=lambda: context_pipeline.PARENT_THRESHOLDS
     )
+    _session_store: Any = None  # SessionStore | None — typed Any to break import cycle
+    _memory_registry: Any = None  # MemoryRegistry — typed Any to avoid cycle
+    _memory_select: Callable[..., Any] | None = None  # async (user_text, registry)
     _client: AsyncOpenAI = field(init=False)
 
     def __post_init__(self) -> None:
         self._client = self._build_client(self.profile)
-        self.history.append(Message(role="system", content=self._compose_system_message()))
+        sys_msg = Message(role="system", content=self._compose_system_message())
+        self._append_history(sys_msg)
+
+    def _append_history(self, msg: Message) -> None:
+        """Append to in-memory history AND mirror to disk if a session store is attached."""
+        self.history.append(msg)
+        if self._session_store is not None:
+            try:
+                self._session_store.append_message(msg)
+            except Exception as e:  # noqa: BLE001
+                if self._meta:
+                    self._meta(f"[session_store: append failed: {type(e).__name__}: {e}]")
+
+    async def _compose_loaded_memories(self, user_text: str) -> str | None:
+        """Pre-load up to 5 relevant memory bodies for this turn."""
+        if self._memory_registry is None or self._memory_select is None:
+            return None
+        if not self._memory_registry.names():
+            return None
+        try:
+            names = await self._memory_select(user_text, self._memory_registry)
+        except Exception as e:  # noqa: BLE001
+            if self._meta:
+                self._meta(f"[memory: side-query failed: {type(e).__name__}: {e}]")
+            return None
+        names = list(names or [])[:5]
+        if not names:
+            return None
+        parts: list[str] = ["## Loaded memories (this turn)\n"]
+        for n in names:
+            mem = self._memory_registry.get(n)
+            if mem is None:
+                continue
+            parts.append(f"### {mem.name}\n{mem.body}\n")
+        if len(parts) == 1:
+            return None
+        return "\n".join(parts).strip()
 
     def _compose_system_message(self) -> str:
         """User-supplied prompt + a runtime note so the model can answer
@@ -115,9 +157,18 @@ class Agent:
             return
 
         baseline_len = len(self.history)
-        self.history.append(Message(role="user", content=user_input))
+        self._append_history(Message(role="user", content=user_input))
 
         yield TurnStarted()
+
+        loaded_layer = await self._compose_loaded_memories(user_input)
+        loaded_msg: Message | None = None
+        if loaded_layer:
+            loaded_msg = Message(role="system", content=loaded_layer)
+            # Insert RIGHT AFTER the persistent system message so the model sees:
+            # [base system] [loaded memories] [user] ...
+            # NOT mirrored to the session store — transient per turn.
+            self.history.insert(1, loaded_msg)
 
         assistant_text_parts: list[str] = []
         stop_reason: str = "stop"
@@ -176,7 +227,7 @@ class Agent:
 
                 # Persist this round's assistant message exactly as the API saw it.
                 assistant_text_parts.append(text)
-                self.history.append(
+                self._append_history(
                     Message(role="assistant", content=text, tool_calls=tool_calls or None)
                 )
 
@@ -217,7 +268,7 @@ class Agent:
                     # on this call's message even with concurrent appends from
                     # other _dispatch_one tasks.
                     idx = len(self.history)
-                    self.history.append(
+                    self._append_history(
                         Message(role="tool", tool_call_id=call_id, name=name, content=content)
                     )
                     out.append(ToolResult(id=call_id, name=name, ok=ok, content=content))
@@ -279,6 +330,8 @@ class Agent:
             stop_error = f"{type(e).__name__}: {e}"
             yield TurnCompleted(reason="error", error=stop_error)
         finally:
+            if loaded_msg is not None and loaded_msg in self.history:
+                self.history.remove(loaded_msg)
             # Stop fires unconditionally so cleanup hooks (audit log flushes,
             # token counters, summaries) always run.
             await self.hooks.trigger(
@@ -313,7 +366,14 @@ class Agent:
         # Refresh the in-history system message so the model knows where it's running.
         new_system = self._compose_system_message()
         non_system = [m for m in self.history if m.role != "system"]
-        self.history = [Message(role="system", content=new_system)] + non_system
+        new_sys_msg = Message(role="system", content=new_system)
+        self.history = [new_sys_msg] + non_system
+        if self._session_store is not None:
+            try:
+                self._session_store.append_message(new_sys_msg)
+            except Exception as e:  # noqa: BLE001
+                if self._meta:
+                    self._meta(f"[session_store: append failed: {type(e).__name__}: {e}]")
 
         try:
             await old.close()

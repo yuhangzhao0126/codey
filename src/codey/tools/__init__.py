@@ -13,7 +13,9 @@ from .bash import ApproveFn, BashTool, Verdict
 from .compact import CompactTool
 from .grep import GrepTool
 from .list_dir import ListDirTool
+from .load_memory import LoadMemoryTool
 from .read_file import ReadFileTool
+from .remember_this import RememberThisTool
 from .spawn_agent import SpawnAgentTool
 from .todo_write import TodoWriteTool
 from .write_file import WriteFileTool
@@ -40,7 +42,9 @@ __all__ = [
     "CompactTool",
     "GrepTool",
     "ListDirTool",
+    "LoadMemoryTool",
     "ReadFileTool",
+    "RememberThisTool",
     "SpawnAgentTool",
     "TodoWriteTool",
     "Verdict",

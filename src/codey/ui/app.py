@@ -42,9 +42,11 @@ from ..prompt import build_system_prompt
 from ..tools import build_default_registry
 from . import renderers, streaming
 from .modals.approval import ApprovalScreen
+from .modals.memory_remember import MemoryDraft, MemoryRememberScreen
 from .modals.mode_picker import ModePickerScreen
 from .modals.profile_picker import ProfilePickerScreen
 from .modals.remember import RememberScreen
+from .modals.resume_picker import ResumePickerScreen
 from .modals.subagent_panel import SubAgentPanelScreen
 from .renderers import UISinks
 from .slash_commands import SlashCommand, build_slash_commands, handle_slash
@@ -90,10 +92,12 @@ class CodeyApp(App[None]):
     # Disable Textual's built-in ctrl+p command palette; we use ctrl+p for our picker.
     ENABLE_COMMAND_PALETTE = False
 
-    def __init__(self, profile_arg: str | None, otel: bool = False) -> None:
+    def __init__(self, profile_arg: str | None, otel: bool = False,
+                 resume_arg: str | None = None) -> None:
         super().__init__()
         self.profile_arg = profile_arg
         self._otel_enabled = otel
+        self._resume_arg = resume_arg
         self.session: Session  # set in on_mount
         self._busy = False
         self._turn_worker: Worker | None = None  # current in-flight model turn
@@ -134,11 +138,14 @@ class CodeyApp(App[None]):
         yield Input(placeholder=self.IDLE_PLACEHOLDER, id="input-row")
         yield Footer()
 
-    async def on_mount(self) -> None:
-        # Build the default hook set wired to TUI sinks. Per-call → / ←
-        # transcript lines are intentionally suppressed (transcript_writer
-        # left at None); use `tail -f ~/.cache/codey/calls.jsonl` to see
-        # them, or attach an OTel viewer.
+    def _build_sinks(self) -> UISinks:
+        """Construct the UISinks bundle wired to this app's transcript.
+
+        Per-call → / ← transcript lines are intentionally suppressed
+        (transcript_writer left at None); use
+        `tail -f ~/.cache/codey/calls.jsonl` to see them, or attach an
+        OTel viewer.
+        """
         def meta_writer(text: str) -> None:
             self._log_meta(text)
 
@@ -146,11 +153,52 @@ class CodeyApp(App[None]):
             self.transcript.write(text)
         todo_writer = renderers.make_tui_todo_writer(todo_line_writer)
 
-        sinks = UISinks(
+        return UISinks(
             meta_writer=meta_writer,
             approve=self._approve_tool,
             todo_writer=todo_writer,
         )
+
+    async def on_mount(self) -> None:
+        sinks = self._build_sinks()
+
+        from ..session_store import SessionStore, SessionResumeError
+
+        if self._resume_arg is None:
+            self._build_fresh_session(sinks)
+        elif self._resume_arg == "__PICK__":
+            metas = SessionStore.list_for_workspace(str(Path.cwd().resolve()))
+            # The picker needs a running app + worker context, so we always
+            # start a fresh session first and swap it out if the user picks one.
+            self._build_fresh_session(sinks)
+            if not metas:
+                self._log_error("no sessions to resume in this workspace")
+            else:
+                self._defer_resume_picker(metas, sinks)
+        else:
+            sid = self._resume_arg
+            try:
+                self.session = Session.build_resumed(
+                    session_id=sid, profile_arg=self.profile_arg,
+                    ui_sinks=sinks, otel_enabled=self._otel_enabled,
+                )
+            except SessionResumeError as e:
+                self._log_error(f"resume failed: {e}")
+                self._build_fresh_session(sinks)
+            except Exception as e:  # noqa: BLE001
+                self._log_error(f"resume failed: {type(e).__name__}: {e}")
+                self._build_fresh_session(sinks)
+
+        self._refresh_title()
+        self._log_meta("codey ready · type / for commands · ctrl+c to quit")
+        self._log_meta(f"workspace: {self.workspace}")
+        self._log_meta(f"permission mode: {self.engine.mode.value}"
+                       + ("  ⚠" if self.engine.mode == Mode.YOLO else ""))
+        if self._resume_arg not in (None, "__PICK__"):
+            self._log_meta(f"[resumed session {self.session.session_id}]")
+        self.query_one(Input).focus()
+
+    def _build_fresh_session(self, sinks: UISinks) -> None:
         try:
             self.session = Session.build(
                 profile_arg=self.profile_arg,
@@ -171,13 +219,6 @@ class CodeyApp(App[None]):
                 )
             else:
                 raise
-
-        self._refresh_title()
-        self._log_meta("codey ready · type / for commands · ctrl+c to quit")
-        self._log_meta(f"workspace: {self.workspace}")
-        self._log_meta(f"permission mode: {self.engine.mode.value}"
-                       + ("  ⚠" if self.engine.mode == Mode.YOLO else ""))
-        self.query_one(Input).focus()
 
     async def on_unmount(self) -> None:
         if hasattr(self, "session"):
@@ -392,6 +433,110 @@ class CodeyApp(App[None]):
         self._refresh_title()
         self._log_meta(f"(switched to {new_profile.name}: {new_profile.model})")
 
+    # -- session resume --
+
+    def _defer_resume_picker(self, metas, sinks: UISinks) -> None:
+        """Open the resume picker in a worker and swap the live session if a
+        session is chosen. push_screen_wait requires a worker context."""
+        async def _go() -> None:
+            picked = await self.push_screen_wait(ResumePickerScreen(metas))
+            if not picked:
+                return
+            try:
+                new_sess = Session.build_resumed(
+                    session_id=picked, profile_arg=self.profile_arg,
+                    ui_sinks=sinks, otel_enabled=self._otel_enabled,
+                )
+            except Exception as e:  # noqa: BLE001
+                self._log_error(f"resume failed: {type(e).__name__}: {e}")
+                return
+            old = getattr(self, "session", None)
+            self.session = new_sess
+            if old is not None:
+                await old.aclose()
+            self._refresh_title()
+            self._log_meta(f"[resumed session {picked}]")
+        self.run_worker(_go(), exclusive=False, group="resume-picker")
+
+    async def _cmd_resume(self, _arg: str = "") -> None:
+        from ..session_store import SessionStore
+        metas = SessionStore.list_for_workspace(str(Path.cwd().resolve()))
+        if not metas:
+            self._log_meta("no sessions to resume in this workspace")
+            return
+        self._defer_resume_picker(metas, self._build_sinks())
+
+    # -- long-term memory: /remember --
+
+    async def _cmd_remember(self, arg: str) -> None:
+        text = (arg or "").strip()
+        if not text:
+            self._log_meta("usage: /remember <freeform text to save as a memory>")
+            return
+        draft = MemoryDraft(
+            name=self._suggest_memory_name(text),
+            description=text[:80],
+            body=text,
+            type="other",
+            scope="project",
+        )
+        self._defer_remember(draft)
+
+    @staticmethod
+    def _suggest_memory_name(text: str) -> str:
+        import re
+        words = re.findall(r"[a-z0-9]+", text.lower())
+        name = "_".join(words[:6])[:64].strip("_")
+        return name or "memory"
+
+    def _defer_remember(self, draft: MemoryDraft) -> None:
+        """Confirm a memory draft in a modal, then write it via MemoryStore."""
+        async def _go() -> None:
+            confirmed = await self.push_screen_wait(MemoryRememberScreen(draft))
+            if confirmed is None:
+                return
+            import re
+            from datetime import datetime
+            from pathlib import Path as _P
+            from ..memory.models import Memory
+            from ..memory.io import parse_memory_md
+
+            name = confirmed.name.strip()
+            if not re.match(r"^[a-z0-9_]{1,64}$", name):
+                self._log_error("memory not saved: name must be snake_case [a-z0-9_], 1-64 chars")
+                return
+            if not confirmed.description.strip() or not confirmed.body.strip():
+                self._log_error("memory not saved: description and body are required")
+                return
+            scope = "global" if confirmed.scope.strip() == "global" else "project"
+
+            store = self.session.memory_store
+            registry = self.session.memory_registry
+            now = datetime.now().isoformat(timespec="seconds")
+            existing = registry.get(name)
+            created_at = existing.created_at if existing is not None else now
+            m = Memory(
+                name=name, description=confirmed.description.strip(),
+                type=confirmed.type.strip() or "other",
+                body=confirmed.body.strip(),
+                created_at=created_at, updated_at=now,
+                source_session=self.session.session_id, scope=scope,
+                source_path=_P("/placeholder"),
+            )
+            try:
+                path = await store.write(m, scope=scope, source="slash")
+            except Exception as e:  # noqa: BLE001
+                self._log_error(f"memory not saved: {type(e).__name__}: {e}")
+                return
+            parsed = parse_memory_md(
+                path.read_text(encoding="utf-8"),
+                filename_stem=name, source_path=path, scope=scope,
+            )
+            if not isinstance(parsed, str):
+                registry._memories[name] = parsed
+            self._log_meta(f"↳ memory saved: {name} ({scope})")
+        self.run_worker(_go(), exclusive=False, group="remember")
+
     # -- rendering helper proxies (kept on the app for the few callers that
     # use them, including the streaming module). Real renderers live in
     # renderers.py.
@@ -558,8 +703,9 @@ class CodeyApp(App[None]):
             event.stop()
 
 
-def run(profile_arg: str | None, otel: bool = False) -> None:
-    app = CodeyApp(profile_arg=profile_arg, otel=otel)
+def run(profile_arg: str | None, otel: bool = False,
+        resume_arg: str | None = None) -> None:
+    app = CodeyApp(profile_arg=profile_arg, otel=otel, resume_arg=resume_arg)
     app.run()
 
 
@@ -572,6 +718,15 @@ def main() -> None:
         help="profile name from ~/.config/codey/config.toml (overrides $CODEY_PROFILE)",
     )
     parser.add_argument(
+        "--resume", "-r",
+        nargs="?",
+        const="__PICK__",
+        default=None,
+        metavar="SID",
+        help="resume a prior session in the current workspace. With no arg, "
+             "open a picker; with SID, resume that session directly.",
+    )
+    parser.add_argument(
         "--otel", action="store_true",
         help="emit OpenTelemetry spans for every turn + tool call "
              "(requires: uv sync --extra observability)",
@@ -581,4 +736,4 @@ def main() -> None:
     # or the config.toml [otel] block (loaded inside Session.build via the
     # already-resolved config — but for the CLI flag we just OR them).
     otel_on = args.otel or _otel_env_enabled()
-    run(args.profile, otel=otel_on)
+    run(args.profile, otel=otel_on, resume_arg=args.resume)

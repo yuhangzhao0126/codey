@@ -71,6 +71,7 @@ src/codey/
       todo_render.py#     Renders the todo list into the UI
       subagent_render.py # Pre+PostToolUse → ⏵/⏷ meta lines for spawn_agent
       skill_render.py    # PostToolUse → ↳ meta line when load_skill returns
+      memory_extract.py  # Stop → fire-and-forget long-term-memory extractor
       otel.py       #     Opt-in OpenTelemetry tracing (--otel / CODEY_OTEL=1)
 
   permissions/      # "What is the agent allowed to do"
@@ -85,12 +86,31 @@ src/codey/
     write_file.py apply_edit.py todo_write.py
     spawn_agent.py  #   Spawn an isolated sub-agent (depth-1 only).
     load_skill.py   #   Fetch one skill's body on demand.
+    load_memory.py  #   Fetch one long-term-memory entry's body on demand.
+    remember_this.py#   Write a long-term-memory entry (parent-only).
 
   skills/           # SKILL.md loader (Claude-Code-compatible subset)
     models.py       #   Skill dataclass + Tier literal
     io.py           #   parse_skill_md() — frontmatter parser
     registry.py     #   SkillRegistry.scan/get/list_meta
   skills_bundled/   # Package-bundled default skills (empty in v1)
+
+  session_store/    # Session persistence + /resume (Part 1 of memory)
+    meta.py         #   SessionMeta — meta.json sidecar (forward-compatible)
+    store.py        #   SessionStore: append_message, load_history,
+                    #   list_for_workspace; writes messages.jsonl live
+    errors.py       #   SessionResumeError
+
+  memory/           # Long-term memory (Part 2): per-entry md + MEMORY.md index
+    models.py       #   Memory dataclass + Scope literal
+    io.py           #   parse_memory_md, write/delete, rebuild_index
+    registry.py     #   MemoryRegistry.scan — two tiers, project wins
+    store.py        #   MemoryStore: the only writer; rebuilds index + audits
+    select.py       #   turn-start side-query (LLM) + keyword fallback
+    extract.py      #   Stop-hook extractor: propose_candidates (LLM)
+    consolidate.py  #   targeted_consolidate: DUPLICATE/UPDATE/SUPERSEDE/NOVEL
+    queue.py        #   ~/.cache/codey/memory_queue.jsonl crash-replay
+    errors.py
 
   context/          # 4-step proactive compaction + reactive retry path
     pipeline.py     #   orchestrator: run_proactive / run_proactive_force_summary
@@ -105,9 +125,10 @@ src/codey/
     errors.py       #   PromptTooLongError + provider error sniffer
 
   config.py         # Profile loading from ~/.config/codey/config.toml
-  prompt.py         # 4-layer system prompt: package default → user
-                    # → ./codey.md → skills index (auto-injected when
-                    # SkillRegistry is non-empty)
+                    # + [memory] toggles (auto_extract/side_query/max_loaded)
+  prompt.py         # 6-layer system prompt: package default → user
+                    # → ./codey.md → skills index → memory index → loaded
+                    # memories (skills/memory layers auto-skip when empty)
   prompts/system.md   # default system prompt (always loaded)
   prompts/subagent.md # default sub-agent system prompt (children only)
 
@@ -117,7 +138,8 @@ src/codey/
     slash_commands.py / slash_suggest.py
     renderers.py    #   _log_* helpers + UISinks
     modals/         #   approval.py, remember.py, profile_picker.py,
-                    #   mode_picker.py, subagent_panel.py
+                    #   mode_picker.py, subagent_panel.py, resume_picker.py,
+                    #   memory_remember.py
 ```
 
 ### How a turn flows
@@ -277,6 +299,48 @@ Pipeline errors are never fatal: any exception inside the proactive call is
 swallowed with a `[ctx: pipeline error: …]` meta line so context management
 can never break a turn that would otherwise have worked.
 
+### Session persistence & long-term memory
+
+Two persistence layers live in `session_store/` and `memory/`. Both fail
+soft: any error emits a `[session_store: …]` / `[memory: …]` meta line and
+never breaks the turn. Full design in `docs/2026-06-13-memory-design.md`.
+
+**Session persistence (`session_store/`).** Every message appended to
+`Agent.history` is mirrored to `~/.cache/codey/transcripts/<sid>/messages.jsonl`
+via `Agent._append_history` (the single chokepoint — there are no raw
+`self.history.append` calls left in `turn.py`). A `meta.json` sidecar
+records workspace/profile/title/counts. `Session.build_resumed(session_id=…)`
+loads the jsonl, drops on-disk `system` entries, re-prepends a freshly
+composed system message, and runs `history.repair` so a crash mid-round
+heals on replay. `/resume` (or `codey --resume [SID]`) lists sessions for
+the cwd via `SessionStore.list_for_workspace` and rebuilds through
+`build_resumed`. A resumed session keeps the same `session_id` — it's a
+continuation, not a fork.
+
+**Long-term memory (`memory/`).** One markdown file per entry across two
+tiers (`~/.config/codey/memory/` global, `<ws>/.codey/memory/` project),
+project wins on name collision (logged `memory_override`). `MEMORY.md` is a
+derived index, rebuilt after every mutation — never hand-authored. All
+writes route through the single `MemoryStore` chokepoint (asyncio.Lock,
+audit line per mutation). The merged index is the 5th prompt layer; a
+per-turn LLM side-query (`select.pick_relevant`, keyword fallback on error)
+pre-loads ≤`max_loaded` bodies as the 6th layer. The Stop-hook extractor
+(`memory_extract` → `extract.propose_candidates` →
+`consolidate.targeted_consolidate`) proposes/dedupes candidates
+fire-and-forget. `remember_this` (model tool) and `/remember` (slash →
+`MemoryRememberScreen`) are explicit write paths; both are **parent-only**
+(children get `load_memory` but not `remember_this`, same as `todo_write`).
+The `[memory]` config block gates this: `auto_extract` (Stop hook),
+`side_query` (turn-start pre-load), `max_loaded` (side-query cap). The
+always-on index is unaffected by `side_query`.
+
+Key wiring lives in `core/session.py:Session.build` /
+`build_resumed` (both construct the registry/store, set
+`agent._memory_select` when `side_query` is on, and pass
+`memory_extract_factory` only when `auto_extract` is on);
+`core/turn.py:Agent._compose_loaded_memories` builds the 6th layer each
+turn; `ui/app.py:_defer_remember` / `_defer_resume_picker` drive the modals.
+
 ### Event stream
 
 `Agent.run()` is an `AsyncIterator[Event]`. Don't expose `print()` from the
@@ -289,7 +353,7 @@ render (transcript hook does this) via UI-supplied writers.
 ## House rules (read before writing code)
 
 ### Don't break the test suite
-`uv run pytest` is **the** verification. ~196 tests, runs in ~8 s. If you
+`uv run pytest` is **the** verification. ~366 tests, runs in ~9 s. If you
 break it, fix it before committing. New behavior gets a new test.
 
 ### Tools are pure
@@ -370,7 +434,7 @@ that should exist. Don't create plan / design / summary files.
 - Commit message body explains **why**, not what.
 - Always include `Co-Authored-By: <Model> <noreply@anthropic.com>` for AI
   contributions.
-- All 196 tests must pass before committing.
+- All tests must pass before committing (`uv run pytest`).
 - Use the existing 4-bucket style for big commits (see recent history):
   context → fix → behavior change → tests passing count.
 
@@ -383,7 +447,8 @@ that should exist. Don't create plan / design / summary files.
 | A new context-pipeline step | `src/codey/context/<name>.py` + chain it in `pipeline.py:run_proactive` |
 | A new built-in permission rule | `BUILTIN_DENY` or `BUILTIN_ALLOW` in `permissions/rules.py` |
 | A new built-in skill | `src/codey/skills_bundled/<name>/SKILL.md` (ships with the package) |
-| A new slash command | `ui/slash_commands.py:_build_slash_commands()` |
+| A new memory write path | route through `memory/store.py:MemoryStore` — never write entry files or `MEMORY.md` directly |
+| A new slash command | `ui/slash_commands.py:build_slash_commands()` + a `_cmd_*` handler on `CodeyApp` |
 | A new test | `tests/test_<area>.py`, async-style, using existing fixtures in `tests/conftest.py` |
 | New CLI flag | `app.py:main()` argparse + thread through to `Session.build` / `CodeyApp` |
 
