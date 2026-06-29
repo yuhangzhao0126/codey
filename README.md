@@ -38,7 +38,18 @@ big enough to be genuinely useful for day-to-day coding tasks.
 - **Stream responses** so you see output as the model produces it.
 - **Cancel a runaway turn** with `esc` in the TUI.
 
-## Setup
+## Install
+
+One line — installs `uv` if needed, then codey from the latest `main`. Re-run
+to update; it seeds a placeholder config and never overwrites your own:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yuhangzhao0126/codey/main/install.sh | bash
+```
+
+Then edit `~/.config/codey/config.toml` to add your API key and run `codey`.
+
+## Setup (from source)
 
 Requirements: **Python ≥ 3.11** and [**uv**](https://github.com/astral-sh/uv).
 
