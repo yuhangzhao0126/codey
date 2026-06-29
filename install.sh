@@ -17,11 +17,18 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
-# 2. install or update codey
+# 2. git is required (uv clones the repo over git+https)
+if ! command -v git >/dev/null 2>&1; then
+  echo "✗ git is required to install codey but was not found."
+  echo "  macOS: xcode-select --install   ·   Debian/Ubuntu: apt-get install -y git"
+  exit 1
+fi
+
+# 3. install or update codey
 echo "→ installing codey from main..."
 uv tool install --force "$REPO"
 
-# 3. seed a placeholder config only if none exists
+# 4. seed a placeholder config only if none exists
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "→ writing default config to $CONFIG_FILE"
   mkdir -p "$CONFIG_DIR"
@@ -36,7 +43,7 @@ TOML
   chmod 600 "$CONFIG_FILE"
 fi
 
-# 4. PATH hint
+# 5. PATH hint
 if ! command -v codey >/dev/null 2>&1; then
   echo "⚠ ~/.local/bin is not on your PATH. Add to your shell rc:"
   echo '    export PATH="$HOME/.local/bin:$PATH"'

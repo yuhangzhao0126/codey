@@ -17,7 +17,14 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
   $env:Path = "$localBin;$env:Path"
 }
 
-# 2. install or update codey
+# 2. git is required (uv clones the repo over git+https)
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+  Write-Host "git is required to install codey but was not found."
+  Write-Host "  Install: winget install Git.Git   (then reopen your terminal)"
+  exit 1
+}
+
+# 3. install or update codey
 Write-Host "-> installing codey from main..."
 uv tool install --force $repo
 
