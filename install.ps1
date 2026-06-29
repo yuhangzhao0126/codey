@@ -4,7 +4,7 @@
 $ErrorActionPreference = "Stop"
 
 $repo       = "git+https://github.com/yuhangzhao0126/codey@main"
-$configDir  = Join-Path $env:APPDATA "codey"
+$configDir  = Join-Path $HOME ".config\codey"
 $configFile = Join-Path $configDir "config.toml"
 $localBin   = Join-Path $HOME ".local\bin"
 
