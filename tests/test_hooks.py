@@ -23,7 +23,7 @@ from codey.hooks.builtin.transcript import (
     post_tool_render_hook,
     pre_tool_render_hook,
 )
-from codey.config import Profile
+from codey.config import Provider
 from codey.hooks import Hook, HookEvent, HookRegistry, HookResult
 from codey.permissions import Mode, PermissionEngine, Verdict
 
@@ -156,7 +156,7 @@ async def test_modified_post_result_propagates_via_payload():
 
 def _agent(hooks: HookRegistry | None = None) -> Agent:
     return Agent(
-        profile=Profile(name="t", api_key="sk", base_url="http://x/v1", model="m"),
+        provider=Provider(name="t", api_key="sk", base_url="http://x/v1", model="m"),
         system_prompt="",
         hooks=hooks or HookRegistry(),
     )

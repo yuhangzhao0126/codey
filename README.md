@@ -17,7 +17,7 @@ big enough to be genuinely useful for day-to-day coding tasks.
 │ codey› This project requires Python 3.11 or higher.                    │
 │                                                                        │
 │ > █                                                                    │
-│ ctrl+c quit · ctrl+r reset · ctrl+p profile                            │
+│ ctrl+c quit · ctrl+r reset · ctrl+p provider                            │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -33,8 +33,8 @@ big enough to be genuinely useful for day-to-day coding tasks.
   - `grep` — regex search across files (skips `.git`, `.venv`, etc.)
   - `write_file` — create/overwrite a file (asks first)
   - `apply_edit` — aider-style search/replace block edits (asks first)
-- **Switch providers/models on the fly** via profiles in `~/.config/codey/config.toml`,
-  with `/profile [name]` or `ctrl+p` for an inline picker.
+- **Switch providers/models on the fly** via providers in `~/.config/codey/config.toml`,
+  with `/provider [name]` or `ctrl+p` for an inline picker.
 - **Stream responses** so you see output as the model produces it.
 - **Cancel a runaway turn** with `esc` in the TUI.
 
@@ -68,38 +68,38 @@ cd codey
 uv sync                                  # creates .venv, installs deps
 ```
 
-### Configure a profile
+### Configure a provider
 
 Create `~/.config/codey/config.toml` (codey will bootstrap one from `.env`
 on first run if it doesn't exist, but writing it directly is simpler):
 
 ```toml
-default_profile = "openai"
+default_provider = "openai"
 
-[profiles.openai]
+[providers.openai]
 base_url = "https://api.openai.com/v1"
 api_key  = "sk-..."
 model    = "gpt-4o-mini"
 
-[profiles.deepseek]
+[providers.deepseek]
 base_url = "https://api.deepseek.com/v1"
 api_key  = "sk-..."
 model    = "deepseek-chat"
 
 # Local / OpenAI-compatible server (e.g. Ollama, vLLM, Agent Maestro)
-[profiles.local]
+[providers.local]
 base_url = "http://localhost:11434/v1"
 api_key  = "sk-local"
 model    = "llama3.1"
 ```
 
-Each profile is a self-contained `(base_url, api_key, model)` bundle.
+Each provider is a self-contained `(base_url, api_key, model)` bundle.
 
 ## Run
 
 ```bash
-uv run codey                       # use default_profile
-uv run codey -p deepseek           # pick a profile for this run
+uv run codey                       # use default_provider
+uv run codey --provider deepseek           # pick a provider for this run
 uv run codey --otel                # also emit OpenTelemetry spans
                                    #   (requires: uv sync --extra observability)
 ```
@@ -111,10 +111,10 @@ uv run codey --otel                # also emit OpenTelemetry spans
 | `/help`           | show all commands                                                      |
 | `/exit`           | quit                                                                   |
 | `/reset`          | clear chat history (keeps system prompt)                               |
-| `/model`          | show the active profile / model / base_url                             |
-| `/profiles`       | list available profiles                                                |
-| `/profile`        | open the inline arrow-key picker                                       |
-| `/profile <name>` | switch directly to a profile                                           |
+| `/model`          | show the active provider / model / base_url                             |
+| `/providers`       | list available providers                                                |
+| `/provider`        | open the inline arrow-key picker                                       |
+| `/provider <name>` | switch directly to a provider                                           |
 
 Commands are **searchable** — type `/pro` to see a dropdown of matches; pick
 one with ↑/↓ + Enter.
@@ -125,7 +125,7 @@ one with ↑/↓ + Enter.
 |-----------|----------------------------------------------|
 | `ctrl+c`  | quit                                         |
 | `ctrl+r`  | clear history                                |
-| `ctrl+p`  | open the profile picker                      |
+| `ctrl+p`  | open the provider picker                      |
 | `esc`     | close the slash-command dropdown, OR cancel an in-flight model turn |
 
 ## System prompt customization
@@ -192,7 +192,7 @@ also turn it on, so you can leave the flag off and keep tracing always-on.
 src/codey/
   app.py         # entry point: argparse + CodeyApp.run()
   __main__.py    # `python -m codey`
-  config.py      # profile loading from ~/.config/codey/config.toml
+  config.py      # provider loading from ~/.config/codey/config.toml
   prompt.py      # 3-layer system prompt assembly
   prompts/
     system.md    # default system prompt
@@ -209,7 +209,7 @@ src/codey/
   ui/            # Textual app + modals + slash commands + renderers
     app.py streaming.py renderers.py
     slash_commands.py slash_suggest.py
-    modals/      # approval, remember, profile_picker, mode_picker
+    modals/      # approval, remember, provider_picker, mode_picker
 tests/           # pytest + Textual Pilot integration tests
 ```
 

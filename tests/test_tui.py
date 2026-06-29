@@ -14,7 +14,7 @@ from codey.core import (
     TurnCompleted,
     TurnStarted,
 )
-from codey.ui import ApprovalScreen, CodeyApp, ProfilePickerScreen, SlashSuggest
+from codey.ui import ApprovalScreen, CodeyApp, ProviderPickerScreen, SlashSuggest
 
 pytestmark = pytest.mark.usefixtures("temp_config")
 
@@ -51,29 +51,29 @@ def _display_is(widget, value: str) -> bool:
 # ---------- /help ----------
 
 async def test_help_lists_all_commands():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/help")
         text = _transcript_text(app)
         for cmd in ("/exit", "/help", "/reset", "/model",
-                    "/profile", "/profiles", "/permission"):
+                    "/provider", "/providers", "/permission"):
             assert cmd in text, f"{cmd} missing from /help output: {text!r}"
 
 
-# ---------- /model — reflects active profile, follows runtime swaps ----------
+# ---------- /model — reflects active provider, follows runtime swaps ----------
 
-async def test_model_shows_active_profile_and_follows_switch():
-    app = CodeyApp(profile_arg=None)
+async def test_model_shows_active_provider_and_follows_switch():
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/model")
         text = _transcript_text(app)
         assert "alpha" in text
         assert "alpha-model" in text
         assert "example.com/alpha/v1" in text
-        # Switch and ask again — output must reflect the new profile.
-        await _submit(pilot, "/profile beta")
+        # Switch and ask again — output must reflect the new provider.
+        await _submit(pilot, "/provider beta")
         for _ in range(10):
-            if app.agent.profile.name == "beta":
+            if app.agent.provider.name == "beta":
                 break
             await pilot.pause()
         await _submit(pilot, "/model")
@@ -85,7 +85,7 @@ async def test_model_shows_active_profile_and_follows_switch():
 # ---------- /reset ----------
 
 async def test_reset_clears_history_but_keeps_system():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         app.agent.history.append(Message(role="user", content="hi"))
         app.agent.history.append(Message(role="assistant", content="hello"))
@@ -95,57 +95,57 @@ async def test_reset_clears_history_but_keeps_system():
         assert "history cleared" in _transcript_text(app)
 
 
-# ---------- /profiles ----------
+# ---------- /providers ----------
 
-async def test_profiles_lists_each_profile():
-    app = CodeyApp(profile_arg=None)
+async def test_providers_lists_each_provider():
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
-        await _submit(pilot, "/profiles")
+        await _submit(pilot, "/providers")
         text = _transcript_text(app)
         for name in ("alpha", "beta"):
             assert name in text
 
 
-# ---------- /profile NAME ----------
+# ---------- /provider NAME ----------
 
-async def test_profile_direct_switch():
-    app = CodeyApp(profile_arg=None)
+async def test_provider_direct_switch():
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
-        assert app.agent.profile.name == "alpha"
-        await _submit(pilot, "/profile beta")
-        # swap_profile is async via lambda -> worker; give it a tick.
+        assert app.agent.provider.name == "alpha"
+        await _submit(pilot, "/provider beta")
+        # swap_provider is async via lambda -> worker; give it a tick.
         for _ in range(10):
-            if app.agent.profile.name == "beta":
+            if app.agent.provider.name == "beta":
                 break
             await pilot.pause()
-        assert app.agent.profile.name == "beta"
-        assert app.agent.profile.model == "beta-model"
+        assert app.agent.provider.name == "beta"
+        assert app.agent.provider.model == "beta-model"
         assert "beta" in app.sub_title
 
 
-# ---------- /profile (no arg) opens picker ----------
+# ---------- /provider (no arg) opens picker ----------
 
-async def test_profile_picker_opens_and_switches():
-    app = CodeyApp(profile_arg=None)
+async def test_provider_picker_opens_and_switches():
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
-        assert app.agent.profile.name == "alpha"
-        await _submit(pilot, "/profile")
+        assert app.agent.provider.name == "alpha"
+        await _submit(pilot, "/provider")
         await pilot.pause()
-        assert any(isinstance(s, ProfilePickerScreen) for s in app.screen_stack), \
+        assert any(isinstance(s, ProviderPickerScreen) for s in app.screen_stack), \
             f"picker not on stack: {[type(s).__name__ for s in app.screen_stack]}"
         await pilot.press("down")
         await pilot.press("enter")
         for _ in range(10):
-            if app.agent.profile.name == "beta":
+            if app.agent.provider.name == "beta":
                 break
             await pilot.pause()
-        assert app.agent.profile.name == "beta"
+        assert app.agent.provider.name == "beta"
 
 
 # ---------- /exit ----------
 
 async def test_exit_quits_app():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/exit")
         await pilot.pause()
@@ -155,7 +155,7 @@ async def test_exit_quits_app():
 # ---------- substring resolve ----------
 
 async def test_pro_is_ambiguous_and_logged_as_error():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/pro")
         text = _transcript_text(app).lower()
@@ -163,7 +163,7 @@ async def test_pro_is_ambiguous_and_logged_as_error():
 
 
 async def test_exi_resolves_to_exit():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/exi")
         await pilot.pause()
@@ -173,7 +173,7 @@ async def test_exi_resolves_to_exit():
 # ---------- slash dropdown ----------
 
 async def test_slash_dropdown_appears_and_filters():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         inp = app.query_one(Input)
         inp.focus()
@@ -189,7 +189,7 @@ async def test_slash_dropdown_appears_and_filters():
 
 
 async def test_slash_dropdown_hides_when_no_match():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         inp = app.query_one(Input)
         inp.focus()
@@ -204,7 +204,7 @@ async def test_slash_dropdown_hides_when_no_match():
 # ---------- ctrl+r hotkey ----------
 
 async def test_ctrl_r_clears_history():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         app.agent.history.append(Message(role="user", content="hi"))
         await pilot.press("ctrl+r")
@@ -216,16 +216,16 @@ async def test_ctrl_r_clears_history():
 # ---------- ctrl+p hotkey ----------
 
 async def test_ctrl_p_opens_picker():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await pilot.press("ctrl+p")
         await pilot.pause()
         # Picker may take an extra tick to push.
         for _ in range(10):
-            if any(isinstance(s, ProfilePickerScreen) for s in app.screen_stack):
+            if any(isinstance(s, ProviderPickerScreen) for s in app.screen_stack):
                 break
             await pilot.pause()
-        assert any(isinstance(s, ProfilePickerScreen) for s in app.screen_stack), \
+        assert any(isinstance(s, ProviderPickerScreen) for s in app.screen_stack), \
             [type(s).__name__ for s in app.screen_stack]
 
 
@@ -268,7 +268,7 @@ class _SlowAgentRun:
 
 
 async def test_busy_placeholder_changes_while_turn_in_flight(monkeypatch):
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         slow = _SlowAgentRun()
         monkeypatch.setattr(app.agent, "run", slow)
@@ -295,7 +295,7 @@ async def test_busy_placeholder_changes_while_turn_in_flight(monkeypatch):
 
 
 async def test_second_submit_while_busy_is_announced(monkeypatch):
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         slow = _SlowAgentRun()
         monkeypatch.setattr(app.agent, "run", slow)
@@ -329,7 +329,7 @@ async def test_second_submit_while_busy_is_announced(monkeypatch):
 
 
 async def test_escape_cancels_in_flight_turn(monkeypatch):
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         slow = _SlowAgentRun()
         monkeypatch.setattr(app.agent, "run", slow)
@@ -353,7 +353,7 @@ async def test_escape_cancels_in_flight_turn(monkeypatch):
 # ---------- permission slash command + mode in header ----------
 
 async def test_permission_status_shows_mode_and_counts():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/permission status")
         text = _transcript_text(app)
@@ -363,7 +363,7 @@ async def test_permission_status_shows_mode_and_counts():
 
 async def test_permission_bare_opens_mode_picker():
     from codey.ui import ModePickerScreen
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/permission")
         for _ in range(10):
@@ -380,7 +380,7 @@ async def test_permission_picker_switch_to_read_only(tmp_path, monkeypatch):
     monkeypatch.setattr(perms, "PROJECT_PERMISSIONS_PATH", tmp_path / "_project.toml")
     from codey.permissions import Mode
     from codey.ui import ModePickerScreen
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/permission")
         for _ in range(10):
@@ -403,7 +403,7 @@ async def test_permission_mode_switch_updates_header(tmp_path, monkeypatch):
     import codey.permissions as perms
     monkeypatch.setattr(perms, "USER_PERMISSIONS_PATH", tmp_path / "permissions.toml")
     monkeypatch.setattr(perms, "PROJECT_PERMISSIONS_PATH", tmp_path / "_project.toml")
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/permission mode read-only")
         await pilot.pause()
@@ -413,7 +413,7 @@ async def test_permission_mode_switch_updates_header(tmp_path, monkeypatch):
 
 
 async def test_permission_unknown_subcommand_reports_error():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/permission frobnicate")
         text = _transcript_text(app).lower()
@@ -426,7 +426,7 @@ async def test_tui_does_not_register_transcript_render_hooks():
     """The TUI passes transcript_writer=None, so the two per-call render
     hooks should be absent from the registry. Tool calls are recorded by
     the audit log only — keeps the conversation clean."""
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await pilot.pause()
         names = {h.name for h in app.hooks.list()}
@@ -444,7 +444,7 @@ async def test_assistant_reply_renders_markdown_at_end_of_turn():
     from rich.markdown import Markdown
     from codey.ui.renderers import log_assistant
 
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         log_assistant(app.transcript, "# title\n\nuse `pip install` for deps")
         await pilot.pause()
@@ -472,7 +472,7 @@ async def test_log_assistant_falls_back_to_raw_on_markdown_failure(monkeypatch):
             raise RuntimeError("forced markdown failure")
 
     monkeypatch.setattr(renderers, "Markdown", _Boom)
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         renderers.log_assistant(app.transcript, "plain reply")
         await pilot.pause()

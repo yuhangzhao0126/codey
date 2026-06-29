@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from codey.config import Profile
+from codey.config import Provider
 from codey.context.errors import PromptTooLongError
 from codey.core.events import (
     AssistantMessageCompleted, AssistantTextDelta, TurnCompleted,
@@ -17,8 +17,8 @@ from codey.core.streaming import RoundDone
 from codey.core.turn import Agent
 
 
-def _profile():
-    return Profile(name="p", api_key="k", base_url="https://x",
+def _provider():
+    return Provider(name="p", api_key="k", base_url="https://x",
                    model="m", context_window=100_000,
                    max_output_tokens=4_096, compact_headroom=13_000)
 
@@ -34,7 +34,7 @@ async def test_run_invokes_pipeline_at_top_of_round(monkeypatch, tmp_path):
     monkeypatch.setattr("codey.context.run_proactive", fake_run_proactive)
     monkeypatch.setattr("codey.core.turn.context_pipeline.run_proactive", fake_run_proactive)
 
-    agent = Agent(profile=_profile())
+    agent = Agent(provider=_provider())
 
     async def fake_stream(self):
         yield AssistantTextDelta(text="hi")
@@ -61,7 +61,7 @@ async def test_run_retries_once_on_prompt_too_long(monkeypatch, tmp_path):
 
     monkeypatch.setattr("codey.core.turn.context_pipeline.run_reactive", fake_reactive)
 
-    agent = Agent(profile=_profile())
+    agent = Agent(provider=_provider())
 
     fail_count = {"n": 0}
 
@@ -92,7 +92,7 @@ async def test_run_surfaces_error_after_one_reactive_retry(monkeypatch, tmp_path
 
     monkeypatch.setattr("codey.core.turn.context_pipeline.run_reactive", fake_reactive)
 
-    agent = Agent(profile=_profile())
+    agent = Agent(provider=_provider())
 
     async def fake_stream(self):
         raise PromptTooLongError("still too big")
@@ -118,7 +118,7 @@ async def test_run_breaks_round_loop_when_only_compact_called(monkeypatch, tmp_p
 
     monkeypatch.setattr("codey.core.turn.context_pipeline.run_proactive", noop)
 
-    agent = Agent(profile=_profile())
+    agent = Agent(provider=_provider())
 
     # Register a fake compact tool so dispatch finds it.
     class FakeCompact:

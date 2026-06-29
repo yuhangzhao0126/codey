@@ -5,9 +5,9 @@ the model's own summary of the prior history plus a re-read of the most
 recent 5 files the agent looked at. System messages survive untouched.
 
 Triggered by the orchestrator when estimate(history) >
-profile.context_window - profile.max_output_tokens - profile.compact_headroom.
+provider.context_window - provider.max_output_tokens - provider.compact_headroom.
 
-Same client + profile as the active agent. The summary call is non-
+Same client + provider as the active agent. The summary call is non-
 streaming, tool-less, low-temperature.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Any, Callable, Iterable
 
 from openai import AsyncOpenAI
 
-from ..config import Profile
+from ..config import Provider
 from ..core.messages import Message
 from . import transcripts as _transcripts
 
@@ -67,10 +67,10 @@ def _render_transcript(history: Iterable[Message]) -> str:
     return "\n".join(lines)
 
 
-async def _summarize(client: AsyncOpenAI, profile: Profile, history: list[Message]) -> str:
+async def _summarize(client: AsyncOpenAI, provider: Provider, history: list[Message]) -> str:
     transcript = _render_transcript(history)
     resp = await client.chat.completions.create(
-        model=profile.model,
+        model=provider.model,
         stream=False,
         temperature=0.2,
         messages=[
@@ -118,7 +118,7 @@ def _build_replacement_user_message(
 async def run(
     *,
     history: list[Message],
-    profile: Profile,
+    provider: Provider,
     session_id: str,
     meta: MetaSink | None,
     client: AsyncOpenAI,
@@ -132,7 +132,7 @@ async def run(
     except Exception:  # noqa: BLE001
         snapshot_path = None
 
-    summary = await _summarize(client, profile, history)
+    summary = await _summarize(client, provider, history)
     file_blocks = _read_recent_files(recent_files, MAX_RECENT_FILES)
 
     system_msgs = [m for m in history if m.role == "system"]

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from codey.config import Profile
+from codey.config import Provider
 from codey.context import reactive as reactive_mod
 from codey.core.messages import Message
 
@@ -28,8 +28,8 @@ class FakeClient:
         self.chat.completions = _FakeChatCompletions(response_text=response_text)
 
 
-def _profile():
-    return Profile(name="p", api_key="k", base_url="x", model="m",
+def _provider():
+    return Provider(name="p", api_key="k", base_url="x", model="m",
                    context_window=100_000, max_output_tokens=4_096,
                    compact_headroom=13_000)
 
@@ -48,7 +48,7 @@ async def test_reactive_keeps_system_summary_and_tail(tmp_path, monkeypatch):
     client = FakeClient(response_text="summary text")
     metas = []
     await reactive_mod.run(
-        history=hist, profile=_profile(), session_id="sid",
+        history=hist, provider=_provider(), session_id="sid",
         meta=metas.append, client=client, recent_files=[],
     )
     assert hist[0].role == "system"
@@ -73,7 +73,7 @@ async def test_reactive_expands_tail_to_pair_boundary(tmp_path, monkeypatch):
     body.extend(Message(role="user", content=f"v{i}") for i in range(3))
     hist = [Message(role="system", content="s")] + body
     await reactive_mod.run(
-        history=hist, profile=_profile(), session_id="sid",
+        history=hist, provider=_provider(), session_id="sid",
         meta=lambda _m: None, client=FakeClient(response_text="ok"),
         recent_files=[],
     )
@@ -92,7 +92,7 @@ async def test_reactive_writes_reactive_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr("codey.context.transcripts._CACHE_ROOT", tmp_path)
     hist = _hist(10)
     await reactive_mod.run(
-        history=hist, profile=_profile(), session_id="sid",
+        history=hist, provider=_provider(), session_id="sid",
         meta=lambda _m: None, client=FakeClient(response_text="s"),
         recent_files=[],
     )

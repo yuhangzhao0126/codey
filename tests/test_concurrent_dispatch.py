@@ -17,7 +17,7 @@ from codey.core import (
     TurnCompleted,
 )
 from codey.core.agent import ToolRegistry
-from codey.config import Profile
+from codey.config import Provider
 
 
 def _agent_with_tools(*tools) -> Agent:
@@ -25,7 +25,7 @@ def _agent_with_tools(*tools) -> Agent:
     for t in tools:
         reg.register(t)
     return Agent(
-        profile=Profile(name="t", api_key="sk", base_url="http://x/v1", model="m"),
+        provider=Provider(name="t", api_key="sk", base_url="http://x/v1", model="m"),
         system_prompt="",
         tools=reg,
     )

@@ -17,14 +17,14 @@ def temp_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pat
     with temp files so tests never touch the real user state."""
     cfg_path = tmp_path / "config.toml"
     cfg_path.write_text(
-        'default_profile = "alpha"\n'
+        'default_provider = "alpha"\n'
         "\n"
-        "[profiles.alpha]\n"
+        "[providers.alpha]\n"
         'base_url = "https://example.com/alpha/v1"\n'
         'api_key  = "sk-alpha"\n'
         'model    = "alpha-model"\n'
         "\n"
-        "[profiles.beta]\n"
+        "[providers.beta]\n"
         'base_url = "https://example.com/beta/v1"\n'
         'api_key  = "sk-beta"\n'
         'model    = "beta-model"\n'
@@ -37,6 +37,6 @@ def temp_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pat
     monkeypatch.setattr(perms_mod, "PROJECT_PERMISSIONS_PATH", tmp_path / "_project_permissions.toml")
 
     # Also clear env so nothing leaks in.
-    for k in ("CODEY_API_KEY", "CODEY_BASE_URL", "CODEY_MODEL", "CODEY_PROFILE"):
+    for k in ("CODEY_API_KEY", "CODEY_BASE_URL", "CODEY_MODEL", "CODEY_PROVIDER"):
         monkeypatch.delenv(k, raising=False)
     yield cfg_path

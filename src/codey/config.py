@@ -1,15 +1,15 @@
-"""Profiles and config loading.
+"""Providers and config loading.
 
-Each *profile* bundles (base_url, api_key, model) for one provider.
-Profiles live in ~/.config/codey/config.toml. CODEY_* env vars (e.g. from .env)
-only fill in *empty* profile fields — they don't override values you've set.
+Each *provider* bundles (base_url, api_key, model) for one provider.
+Providers live in ~/.config/codey/config.toml. CODEY_* env vars (e.g. from .env)
+only fill in *empty* provider fields — they don't override values you've set.
 
-Resolution order for which profile is active (highest wins):
+Resolution order for which provider is active (highest wins):
     1. explicit name passed to ConfigFile.resolve(name=...)
-    2. $CODEY_PROFILE
-    3. default_profile in config.toml
+    2. $CODEY_PROVIDER
+    3. default_provider in config.toml
 
-The system prompt is NOT part of a profile — see codey.prompt.
+The system prompt is NOT part of a provider — see codey.prompt.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ PLACEHOLDER_API_KEY = "sk-..."  # what install.sh/.ps1 seed; means "not yet set"
 class MemoryConfig:
     """User-level long-term-memory toggles, from the top-level [memory] block.
 
-    One setting per user; no per-profile override in v1.
+    One setting per user; no per-provider override in v1.
       - auto_extract: run the Stop-hook extractor after each turn.
       - side_query:   run the turn-start LLM side-query that pre-loads
                       relevant memory bodies. The always-on index in the
@@ -50,7 +50,7 @@ class MemoryConfig:
 
 
 @dataclass(frozen=True)
-class Profile:
+class Provider:
     name: str
     api_key: str
     base_url: str
@@ -68,8 +68,8 @@ class Profile:
 class ConfigFile:
     """In-memory view of ~/.config/codey/config.toml."""
 
-    default_profile: str
-    profiles: dict[str, Profile]
+    default_provider: str
+    providers: dict[str, Provider]
     memory: MemoryConfig = field(default_factory=MemoryConfig)
 
     @classmethod
@@ -83,16 +83,16 @@ class ConfigFile:
         with CONFIG_PATH.open("rb") as f:
             data = tomllib.load(f)
 
-        raw_profiles = data.get("profiles", {})
-        if not raw_profiles:
+        raw_providers = data.get("providers", {})
+        if not raw_providers:
             raise RuntimeError(
-                f"{CONFIG_PATH} has no [profiles.*] entries. "
-                "Add at least one profile."
+                f"{CONFIG_PATH} has no [providers.*] entries. "
+                "Add at least one provider."
             )
 
-        profiles: dict[str, Profile] = {}
-        for name, body in raw_profiles.items():
-            profiles[name] = Profile(
+        providers: dict[str, Provider] = {}
+        for name, body in raw_providers.items():
+            providers[name] = Provider(
                 name=name,
                 api_key=body.get("api_key", ""),
                 base_url=body.get("base_url", DEFAULT_BASE_URL),
@@ -102,12 +102,12 @@ class ConfigFile:
                 compact_headroom=int(body.get("compact_headroom", DEFAULT_COMPACT_HEADROOM)),
             )
 
-        default = data.get("default_profile") or next(iter(profiles))
-        if default not in profiles:
+        default = data.get("default_provider") or next(iter(providers))
+        if default not in providers:
             raise RuntimeError(
-                f"default_profile = {default!r} not found in [profiles.*]"
+                f"default_provider = {default!r} not found in [providers.*]"
             )
-        return cls(default_profile=default, profiles=profiles,
+        return cls(default_provider=default, providers=providers,
                    memory=_parse_memory(data.get("memory", {})))
 
     @classmethod
@@ -117,7 +117,7 @@ class ConfigFile:
         if not api_key:
             raise RuntimeError(
                 f"No config at {CONFIG_PATH} and CODEY_API_KEY is unset.\n"
-                f"Either create {CONFIG_PATH} with a [profiles.*] block, "
+                f"Either create {CONFIG_PATH} with a [providers.*] block, "
                 "or set CODEY_API_KEY in .env so codey can bootstrap one."
             )
 
@@ -126,9 +126,9 @@ class ConfigFile:
 
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_PATH.write_text(
-            'default_profile = "default"\n'
+            'default_provider = "default"\n'
             "\n"
-            "[profiles.default]\n"
+            "[providers.default]\n"
             f'base_url = "{base_url}"\n'
             f'api_key  = "{api_key}"\n'
             f'model    = "{model}"\n'
@@ -137,25 +137,25 @@ class ConfigFile:
             CONFIG_PATH.chmod(0o600)
         except OSError:
             pass
-        print(f"(created {CONFIG_PATH} from .env — edit it to add more profiles)")
+        print(f"(created {CONFIG_PATH} from .env — edit it to add more providers)")
         return cls.load()
 
-    def resolve(self, name: str | None = None) -> Profile:
-        """Pick the active profile. Profile fields win; env vars fill empty fields."""
-        chosen = name or os.environ.get("CODEY_PROFILE") or self.default_profile
-        if chosen not in self.profiles:
+    def resolve(self, name: str | None = None) -> Provider:
+        """Pick the active provider. Provider fields win; env vars fill empty fields."""
+        chosen = name or os.environ.get("CODEY_PROVIDER") or self.default_provider
+        if chosen not in self.providers:
             raise RuntimeError(
-                f"Unknown profile {chosen!r}. "
-                f"Available: {', '.join(sorted(self.profiles)) or '(none)'}"
+                f"Unknown provider {chosen!r}. "
+                f"Available: {', '.join(sorted(self.providers)) or '(none)'}"
             )
-        profile = self.profiles[chosen]
+        provider = self.providers[chosen]
 
-        # env vars only fill in empty profile fields
+        # env vars only fill in empty provider fields
         return replace(
-            profile,
-            api_key=profile.api_key or os.environ.get("CODEY_API_KEY", ""),
-            base_url=profile.base_url or os.environ.get("CODEY_BASE_URL", DEFAULT_BASE_URL),
-            model=profile.model or os.environ.get("CODEY_MODEL", DEFAULT_MODEL),
+            provider,
+            api_key=provider.api_key or os.environ.get("CODEY_API_KEY", ""),
+            base_url=provider.base_url or os.environ.get("CODEY_BASE_URL", DEFAULT_BASE_URL),
+            model=provider.model or os.environ.get("CODEY_MODEL", DEFAULT_MODEL),
         )
 
 
@@ -179,16 +179,16 @@ def _parse_memory(raw: dict) -> MemoryConfig:
     )
 
 
-def set_profile_api_key(profile_name: str, api_key: str) -> None:
-    """Rewrite api_key for one [profiles.<name>] block in config.toml, in place.
+def set_provider_api_key(provider_name: str, api_key: str) -> None:
+    """Rewrite api_key for one [providers.<name>] block in config.toml, in place.
 
-    Only the api_key line of that profile is touched; everything else stays.
+    Only the api_key line of that provider is touched; everything else stays.
     No-op if the file or block is absent.
     """
     if not CONFIG_PATH.exists():
         return
     lines = CONFIG_PATH.read_text().splitlines()
-    header = f"[profiles.{profile_name}]"
+    header = f"[providers.{provider_name}]"
     in_block = False
     for i, line in enumerate(lines):
         stripped = line.strip()

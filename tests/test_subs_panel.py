@@ -44,7 +44,7 @@ def _seed_recorder(app: CodeyApp) -> None:
 
 
 async def test_subs_opens_panel_with_recorded_children():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         _seed_recorder(app)
         await _submit(pilot, "/subs")
@@ -82,7 +82,7 @@ async def test_subs_opens_panel_with_recorded_children():
 
 
 async def test_subs_panel_empty_state_shows_placeholder():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/subs")
         for _ in range(20):
@@ -100,7 +100,7 @@ async def test_subs_panel_empty_state_shows_placeholder():
 
 
 async def test_subs_panel_detail_view_renders_event_lines():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         _seed_recorder(app)
         await _submit(pilot, "/subs")
@@ -128,7 +128,7 @@ async def test_approval_modal_shows_requester_when_provided():
     """When the permission hook supplies a requester, the modal renders
     a 'requested by:' line. Parent calls (requester=None) don't get it."""
     from codey.ui import ApprovalScreen
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         # With requester:
         await pilot.app.push_screen(

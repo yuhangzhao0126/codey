@@ -30,7 +30,7 @@ Public surface for users is documented in `README.md`.
 uv sync                    # install deps into .venv
 uv run pytest              # run the test suite (must stay green)
 uv run codey               # Textual TUI
-uv run codey -p deepseek   # pick a profile from ~/.config/codey/config.toml
+uv run codey --provider deepseek   # pick a provider from ~/.config/codey/config.toml
 ```
 
 Python **≥ 3.11** (uses `tomllib`). Use `uv add` / `uv remove` for deps;
@@ -57,7 +57,7 @@ src/codey/
     messages.py     #   Role, Message, Message.to_wire()
     events.py       #   TurnStarted, RoundStarted, AssistantTextDelta, …
     agent.py        #   Tool Protocol + ToolRegistry dataclass
-    session.py      #   Session: bundles Profile + Agent + PermissionEngine
+    session.py      #   Session: bundles Provider + Agent + PermissionEngine
                     #   + HookRegistry + ToolRegistry; one host-facing handle
 
   hooks/            # Cross-cutting observers / decision points
@@ -124,7 +124,7 @@ src/codey/
     transcripts.py  #   ~/.cache/codey/transcripts/<sid>/ disk I/O
     errors.py       #   PromptTooLongError + provider error sniffer
 
-  config.py         # Profile loading from ~/.config/codey/config.toml
+  config.py         # Provider loading from ~/.config/codey/config.toml
                     # + [memory] toggles (auto_extract/side_query/max_loaded)
   prompt.py         # 6-layer system prompt: package default → user
                     # → ./codey.md → skills index → memory index → loaded
@@ -137,7 +137,7 @@ src/codey/
     streaming.py    #   _stream_turn — consumes core.events, batches deltas
     slash_commands.py / slash_suggest.py
     renderers.py    #   _log_* helpers + UISinks
-    modals/         #   approval.py, remember.py, profile_picker.py,
+    modals/         #   approval.py, remember.py, provider_picker.py,
                     #   mode_picker.py, subagent_panel.py, resume_picker.py,
                     #   memory_remember.py
 ```
@@ -177,7 +177,7 @@ Key files:
 
   - `tools/spawn_agent.py`        — the model-facing tool; pure
   - `core/session.py:build_child_agent` — single place that constructs a
-                                          child Agent (profile, hooks,
+                                          child Agent (provider, hooks,
                                           tools, system prompt)
   - `core/session.py:SubAgentRecorder` — in-memory cap-bounded store of every
                                          event each child emitted; powers
@@ -257,8 +257,8 @@ met):
      to summarize prior history; replaces conversation body with one
      synthetic user message containing the summary + a re-read of the 5
      most-recent files the agent looked at. Only fires when
-     `estimate(history) > profile.context_window - profile.max_output_tokens -
-     profile.compact_headroom`.
+     `estimate(history) > provider.context_window - provider.max_output_tokens -
+     provider.compact_headroom`.
 
 Two user-facing triggers force step 4 immediately, regardless of token
 budget: the `/compact` slash command and a model-callable `compact` tool.
@@ -309,7 +309,7 @@ never breaks the turn. Full design in `docs/2026-06-13-memory-design.md`.
 `Agent.history` is mirrored to `~/.cache/codey/transcripts/<sid>/messages.jsonl`
 via `Agent._append_history` (the single chokepoint — there are no raw
 `self.history.append` calls left in `turn.py`). A `meta.json` sidecar
-records workspace/profile/title/counts. `Session.build_resumed(session_id=…)`
+records workspace/provider/title/counts. `Session.build_resumed(session_id=…)`
 loads the jsonl, drops on-disk `system` entries, re-prepends a freshly
 composed system message, and runs `history.repair` so a crash mid-round
 heals on replay. `/resume` (or `codey --resume [SID]`) lists sessions for
@@ -367,7 +367,7 @@ new tool" for the recipe.
 
 (One narrow exception: `spawn_agent` accepts a `session_provider` callable
 because it has to construct child `Agent`s — and that needs the live
-Session for profile resolution, the shared engine, and the shared audit
+Session for provider resolution, the shared engine, and the shared audit
 writer. It's still pure in the contractual sense: no permission logic, no
 UI rendering, returns a string. The wiring lives in `Session.build`, not
 `build_default_registry`.)
@@ -458,9 +458,9 @@ that should exist. Don't create plan / design / summary files.
   `hooks.py`, or `builtin_hooks/`. They were intentionally split into
   `core/`, `ui/`, `permissions/`, and `hooks/` (see Architecture).
 - Don't reintroduce `_gate.py`. Permission gating is a hook.
-- Don't make `Agent` depend on `Profile` mutating — `Profile` is frozen.
-  Use `Session.swap_profile()` (or `Agent.swap_profile()` directly) to switch.
-- Don't add a `--no-permission-check` CLI flag. Use `--profile` + a
+- Don't make `Agent` depend on `Provider` mutating — `Provider` is frozen.
+  Use `Session.swap_provider()` (or `Agent.swap_provider()` directly) to switch.
+- Don't add a `--no-permission-check` CLI flag. Use `--provider` + a
   yolo-mode permissions.toml, or `/permission mode yolo`.
 - Don't bypass `uv` (no `pip install`, no `pip-tools`).
 - Don't commit `~/.config/codey/` or `.codey/permissions.toml` from this

@@ -110,7 +110,7 @@ async def test_permission_hook_auto_allows_todo_write_in_all_modes():
 
 async def test_agent_reset_clears_todo_list():
     from codey.core import Agent
-    from codey.config import Profile
+    from codey.config import Provider
     from codey.tools import build_default_registry
 
     reg = build_default_registry()
@@ -119,7 +119,7 @@ async def test_agent_reset_clears_todo_list():
     assert todo_tool.todos
 
     agent = Agent(
-        profile=Profile(name="t", api_key="sk", base_url="http://x/v1", model="m"),
+        provider=Provider(name="t", api_key="sk", base_url="http://x/v1", model="m"),
         system_prompt="",
         tools=reg,
     )

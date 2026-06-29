@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from codey.config import Profile
+from codey.config import Provider
 from codey.context.errors import PromptTooLongError
 from codey.core import streaming as streaming_mod
 
@@ -31,8 +31,8 @@ class FakeClient:
         self.chat.completions = FakeChatCompletions(exc)
 
 
-def _profile():
-    return Profile(name="p", api_key="k", base_url="x", model="m")
+def _provider():
+    return Provider(name="p", api_key="k", base_url="x", model="m")
 
 
 @pytest.mark.asyncio
@@ -42,7 +42,7 @@ async def test_stream_one_round_wraps_context_length_exceeded():
         code="context_length_exceeded",
     ))
     with pytest.raises(PromptTooLongError):
-        async for _ in streaming_mod.stream_one_round(client, _profile(), [], []):
+        async for _ in streaming_mod.stream_one_round(client, _provider(), [], []):
             pass
 
 
@@ -50,7 +50,7 @@ async def test_stream_one_round_wraps_context_length_exceeded():
 async def test_stream_one_round_wraps_http_413():
     client = FakeClient(FakeOpenAIError("too big", status_code=413))
     with pytest.raises(PromptTooLongError):
-        async for _ in streaming_mod.stream_one_round(client, _profile(), [], []):
+        async for _ in streaming_mod.stream_one_round(client, _provider(), [], []):
             pass
 
 
@@ -60,5 +60,5 @@ async def test_stream_one_round_lets_unrelated_errors_through():
         pass
     client = FakeClient(Boom("rate limit"))
     with pytest.raises(Boom):
-        async for _ in streaming_mod.stream_one_round(client, _profile(), [], []):
+        async for _ in streaming_mod.stream_one_round(client, _provider(), [], []):
             pass

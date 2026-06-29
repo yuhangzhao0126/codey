@@ -12,7 +12,7 @@ from typing import Callable, Iterable
 
 from openai import AsyncOpenAI
 
-from ..config import Profile
+from ..config import Provider
 from ..core.messages import Message
 from . import llm as _llm
 from . import snip as _snip
@@ -27,7 +27,7 @@ MetaSink = Callable[[str], None]
 async def run(
     *,
     history: list[Message],
-    profile: Profile,
+    provider: Provider,
     session_id: str,
     meta: MetaSink | None,
     client: AsyncOpenAI,
@@ -40,7 +40,7 @@ async def run(
     except Exception:  # noqa: BLE001
         snapshot_path = None
 
-    summary = await _llm._summarize(client, profile, history)
+    summary = await _llm._summarize(client, provider, history)
     file_blocks = _llm._read_recent_files(recent_files, _llm.MAX_RECENT_FILES)
 
     sys_count = sum(1 for m in history if m.role == "system")

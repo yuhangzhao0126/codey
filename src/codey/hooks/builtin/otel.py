@@ -6,7 +6,7 @@ host opts in via the `--otel` CLI flag, the `CODEY_OTEL=1` env var, or a
 
 Span shape per turn:
 
-  turn (session_id, profile.name, profile.model)
+  turn (session_id, provider.name, provider.model)
   └─ tool_call: bash (tool, call_id, arguments)
   └─ tool_call: read_file …
 
@@ -52,7 +52,7 @@ def otel_enabled(config_otel: dict | None = None) -> bool:
 def build_otel_hooks(
     *,
     session_id: str,
-    profile_name: str,
+    provider_name: str,
     model: str,
     base_url: str,
     service_name: str | None = None,
@@ -111,7 +111,7 @@ def build_otel_hooks(
     def _start_turn(payload: dict[str, Any]) -> HookResult | None:
         span = tracer.start_span("turn", attributes={
             "codey.session_id": session_id,
-            "codey.profile": profile_name,
+            "codey.provider": provider_name,
             "codey.model": model,
             "codey.base_url": base_url,
         })

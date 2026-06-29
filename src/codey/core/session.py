@@ -6,7 +6,7 @@ point. Adding cross-cutting state (token budget, session id, transcript
 export) has one obvious home.
 
 The host (TUI) supplies a UISinks bundle holding the writers/approver the
-hooks need. Session.build() composes Profile + PermissionEngine +
+hooks need. Session.build() composes Provider + PermissionEngine +
 ToolRegistry + HookRegistry + Agent and returns the bundle.
 
 Behavior is identical to the pre-refactor wiring — this is pure relocation.
@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
-from ..config import ConfigFile, Profile
+from ..config import ConfigFile, Provider
 from ..hooks import HookRegistry
 from ..hooks.builtin import build_default_hooks
 from ..permissions import PermissionEngine
@@ -89,7 +89,7 @@ class SubAgentRecorder:
 
 @dataclass
 class Session:
-    profile: Profile
+    provider: Provider
     workspace: Path
     cfg: ConfigFile
     agent: Agent
@@ -111,7 +111,7 @@ class Session:
     def build(
         cls,
         *,
-        profile_arg: str | None,
+        provider_arg: str | None,
         ui_sinks: UISinks,
         workspace: Path | None = None,
         otel_enabled: bool = False,
@@ -119,7 +119,7 @@ class Session:
         from datetime import datetime as _dt
 
         cfg = ConfigFile.load()
-        profile = cfg.resolve(profile_arg)
+        provider = cfg.resolve(provider_arg)
         ws = (workspace or Path.cwd()).resolve()
         engine = PermissionEngine.load(workspace=ws)
         tools = build_default_registry()
@@ -132,7 +132,7 @@ class Session:
         store = SessionStore(session_id=session_id)
         store.save_meta(
             workspace=str(ws),
-            profile=profile.name,
+            provider=provider.name,
             started_at=_dt.now().isoformat(timespec="seconds"),
         )
 
@@ -152,9 +152,9 @@ class Session:
         otel_cfg: dict | None = None
         if otel_enabled:
             otel_cfg = {
-                "profile_name": profile.name,
-                "model": profile.model,
-                "base_url": profile.base_url,
+                "provider_name": provider.name,
+                "model": provider.model,
+                "base_url": provider.base_url,
             }
         recent_reads: deque = deque(maxlen=5)
 
@@ -162,7 +162,7 @@ class Session:
         # so it can read history live + reuse the agent's client. We build
         # the Agent first, then wire the hook factory.
         agent = Agent(
-            profile=profile,
+            provider=provider,
             system_prompt=build_system_prompt(skills=skills, memory=memory_registry),
             tools=tools,
             hooks=HookRegistry(),  # placeholder, replaced just below
@@ -176,7 +176,7 @@ class Session:
         async def _side_query(user_text: str, registry):
             return await pick_relevant(
                 user_text, registry,
-                client=agent._client, model=profile.model,
+                client=agent._client, model=provider.model,
                 k=cfg.memory.max_loaded,
             )
         if cfg.memory.side_query:
@@ -189,7 +189,7 @@ class Session:
                 registry=memory_registry,
                 store=memory_store,
                 client_provider=lambda: agent._client,
-                model=profile.model,
+                model=provider.model,
                 session_id=session_id,
                 queue_path=Path.home() / ".cache" / "codey" / "memory_queue.jsonl",
                 meta=ui_sinks.meta_writer,
@@ -211,7 +211,7 @@ class Session:
         )
         agent.hooks = hooks
 
-        sess = cls(profile=profile, workspace=ws, cfg=cfg, agent=agent,
+        sess = cls(provider=provider, workspace=ws, cfg=cfg, agent=agent,
                    engine=engine, hooks=hooks, tools=tools,
                    session_id=session_id, skills=skills,
                    memory_registry=memory_registry, memory_store=memory_store,
@@ -255,12 +255,12 @@ class Session:
         cls,
         *,
         session_id: str,
-        profile_arg: str | None,
+        provider_arg: str | None,
         ui_sinks: UISinks,
         workspace: Path | None = None,
         otel_enabled: bool = False,
     ) -> "Session":
-        """Load a prior session by id; resume in its workspace + profile."""
+        """Load a prior session by id; resume in its workspace + provider."""
         from datetime import datetime as _dt
         from . import history as _history_mod
 
@@ -273,7 +273,7 @@ class Session:
             )
 
         cfg = ConfigFile.load()
-        profile = cfg.resolve(profile_arg or meta.profile)
+        provider = cfg.resolve(provider_arg or meta.provider)
 
         engine = PermissionEngine.load(workspace=ws_path)
         tools = build_default_registry()
@@ -298,14 +298,14 @@ class Session:
         otel_cfg: dict | None = None
         if otel_enabled:
             otel_cfg = {
-                "profile_name": profile.name,
-                "model": profile.model,
-                "base_url": profile.base_url,
+                "provider_name": provider.name,
+                "model": provider.model,
+                "base_url": provider.base_url,
             }
         recent_reads: deque = deque(maxlen=5)
 
         agent = Agent(
-            profile=profile,
+            provider=provider,
             system_prompt=build_system_prompt(skills=skills, memory=memory_registry),
             tools=tools,
             hooks=HookRegistry(),  # placeholder, replaced below
@@ -319,7 +319,7 @@ class Session:
         async def _side_query(user_text: str, registry):
             return await pick_relevant(
                 user_text, registry,
-                client=agent._client, model=profile.model,
+                client=agent._client, model=provider.model,
                 k=cfg.memory.max_loaded,
             )
         if cfg.memory.side_query:
@@ -332,7 +332,7 @@ class Session:
                 registry=memory_registry,
                 store=memory_store,
                 client_provider=lambda: agent._client,
-                model=profile.model,
+                model=provider.model,
                 session_id=session_id,
                 queue_path=Path.home() / ".cache" / "codey" / "memory_queue.jsonl",
                 meta=ui_sinks.meta_writer,
@@ -362,7 +362,7 @@ class Session:
         _history_mod.repair(agent.history)
 
         sess = cls(
-            profile=profile, workspace=ws_path, cfg=cfg, agent=agent,
+            provider=provider, workspace=ws_path, cfg=cfg, agent=agent,
             engine=engine, hooks=hooks, tools=tools,
             session_id=session_id, skills=skills,
             memory_registry=memory_registry, memory_store=memory_store,
@@ -391,17 +391,17 @@ class Session:
         )
         return sess
 
-    async def swap_profile(self, name: str) -> Profile:
-        new_profile = self.cfg.resolve(name)
-        await self.agent.swap_profile(new_profile)
-        self.profile = new_profile
-        return new_profile
+    async def swap_provider(self, name: str) -> Provider:
+        new_provider = self.cfg.resolve(name)
+        await self.agent.swap_provider(new_provider)
+        self.provider = new_provider
+        return new_provider
 
     def build_child_agent(
         self,
         *,
         description: str,
-        profile_name: str | None = None,
+        provider_name: str | None = None,
     ) -> tuple[Agent, str]:
         """Construct a sub-agent. The ONLY place that knows how.
 
@@ -412,7 +412,7 @@ class Session:
         from ..hooks.builtin import build_child_hooks
         from ..prompt import build_subagent_system_prompt
 
-        child_profile = self.profile if profile_name is None else self.cfg.resolve(profile_name)
+        child_provider = self.provider if provider_name is None else self.cfg.resolve(provider_name)
 
         self._sub_counter += 1
         child_id = f"{self.session_id}.sub.{self._sub_counter}"
@@ -441,7 +441,7 @@ class Session:
         )
 
         child = Agent(
-            profile=child_profile,
+            provider=child_provider,
             system_prompt=child_system,
             tools=child_tools,
             hooks=child_hooks,

@@ -6,7 +6,7 @@ is allowed). No UI rendering (the subagent_render hook handles meta
 lines). Returns a string, never raises — every failure becomes
 "error: ..." so the model can react.
 
-The tool needs the live Session to construct children (profile resolution,
+The tool needs the live Session to construct children (provider resolution,
 shared engine, shared audit writer). Because tools are normally
 constructor-arg-free and registered in build_default_registry, we accept
 a session_provider callable and register the tool from Session.build
@@ -65,11 +65,11 @@ class SpawnAgentTool:
                         "instruct it to end with a complete summary."
                     ),
                 },
-                "profile": {
+                "provider": {
                     "type": "string",
                     "description": (
-                        "Optional profile name from ~/.config/codey/config.toml. "
-                        "Defaults to the parent's profile."
+                        "Optional provider name from ~/.config/codey/config.toml. "
+                        "Defaults to the parent's provider."
                     ),
                 },
             },
@@ -80,7 +80,7 @@ class SpawnAgentTool:
     async def run(self, arguments: dict[str, Any]) -> str:
         description = (arguments.get("description") or "").strip() or "(no description)"
         prompt = arguments.get("prompt") or ""
-        profile_name = arguments.get("profile") or None
+        provider_name = arguments.get("provider") or None
 
         if not prompt:
             return "error: spawn_agent requires a non-empty `prompt`"
@@ -89,14 +89,14 @@ class SpawnAgentTool:
         if sess is None:
             return "error: spawn_agent is not wired to a session"
 
-        # Build the child. cfg.resolve raises RuntimeError on unknown profile
+        # Build the child. cfg.resolve raises RuntimeError on unknown provider
         # — translate to the tool's string-error contract.
         try:
             child, child_id = sess.build_child_agent(
-                description=description, profile_name=profile_name,
+                description=description, provider_name=provider_name,
             )
         except RuntimeError as e:
-            return f"error: unknown profile: {e}"
+            return f"error: unknown provider: {e}"
         except Exception as e:  # noqa: BLE001
             return f"error: failed to construct sub-agent: {type(e).__name__}: {e}"
 

@@ -48,7 +48,7 @@ class CompactTool:
         try:
             await context_pipeline.run_proactive_force_summary(
                 history=agent.history,
-                profile=agent.profile,
+                provider=agent.provider,
                 session_id=agent.session_id,
                 meta=agent._meta,
                 client=agent._client,

@@ -3,7 +3,7 @@
 from .approval import ApprovalScreen
 from .memory_remember import MemoryDraft, MemoryRememberScreen
 from .mode_picker import ModePickerScreen
-from .profile_picker import ProfilePickerScreen
+from .provider_picker import ProviderPickerScreen
 from .remember import RememberScreen
 from .resume_picker import ResumePickerScreen
 
@@ -12,7 +12,7 @@ __all__ = [
     "MemoryDraft",
     "MemoryRememberScreen",
     "ModePickerScreen",
-    "ProfilePickerScreen",
+    "ProviderPickerScreen",
     "RememberScreen",
     "ResumePickerScreen",
 ]

@@ -31,7 +31,7 @@ async def test_one_turn_emits_turn_span_with_tool_call_children():
     provider, exporter = _fresh_provider()
     cbs = build_otel_hooks(
         session_id="sess1",
-        profile_name="alpha",
+        provider_name="alpha",
         model="alpha-model",
         base_url="http://x/v1",
         tracer_provider=provider,
@@ -55,7 +55,7 @@ async def test_one_turn_emits_turn_span_with_tool_call_children():
 
     turn = next(s for s in spans if s.name == "turn")
     assert turn.attributes["codey.session_id"] == "sess1"
-    assert turn.attributes["codey.profile"] == "alpha"
+    assert turn.attributes["codey.provider"] == "alpha"
     assert turn.attributes["codey.model"] == "alpha-model"
     assert turn.attributes["codey.stop_reason"] == "stop"
 
@@ -72,7 +72,7 @@ async def test_one_turn_emits_turn_span_with_tool_call_children():
 async def test_stop_with_error_marks_turn_span_failed():
     provider, exporter = _fresh_provider()
     cbs = build_otel_hooks(
-        session_id="s", profile_name="p", model="m", base_url="u",
+        session_id="s", provider_name="p", model="m", base_url="u",
         tracer_provider=provider,
     )
     reg = HookRegistry()

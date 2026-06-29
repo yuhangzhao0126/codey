@@ -3,7 +3,7 @@
 Layout (geek-clear, minimal):
 
   ┌────────────────────────────────────────────────────────────┐
-  │ codey · profile · model · base_url                  header │
+  │ codey · provider · model · base_url                  header │
   ├────────────────────────────────────────────────────────────┤
   │                                                            │
   │   you  › what's the python version?                        │
@@ -14,12 +14,12 @@ Layout (geek-clear, minimal):
   │                                              (transcript)  │
   ├────────────────────────────────────────────────────────────┤
   │   ┌─────────────────────┐                                  │
-  │   │ /profile  switch …  │  ← dropdown appears when you     │
-  │   │ /profiles list pr…  │    type a slash; ↑/↓ Enter Esc   │
+  │   │ /provider  switch …  │  ← dropdown appears when you     │
+  │   │ /providers list pr…  │    type a slash; ↑/↓ Enter Esc   │
   │   └─────────────────────┘                                  │
   │ > /pro█                                                    │  (input)
   ├────────────────────────────────────────────────────────────┤
-  │ ctrl+c quit · ctrl+r reset · ctrl+p profile           foot │
+  │ ctrl+c quit · ctrl+r reset · ctrl+p provider           foot │
   └────────────────────────────────────────────────────────────┘
 """
 
@@ -44,7 +44,7 @@ from . import renderers, streaming
 from .modals.approval import ApprovalScreen
 from .modals.memory_remember import MemoryDraft, MemoryRememberScreen
 from .modals.mode_picker import ModePickerScreen
-from .modals.profile_picker import ProfilePickerScreen
+from .modals.provider_picker import ProviderPickerScreen
 from .modals.remember import RememberScreen
 from .modals.resume_picker import ResumePickerScreen
 from .modals.subagent_panel import SubAgentPanelScreen
@@ -86,16 +86,16 @@ class CodeyApp(App[None]):
         Binding("ctrl+c", "quit",     "quit",    priority=True),
         Binding("ctrl+d", "quit",     "quit",    show=False, priority=True),
         Binding("ctrl+r", "reset",    "reset history"),
-        Binding("ctrl+p", "profile",  "switch profile", priority=True),
+        Binding("ctrl+p", "provider",  "switch provider", priority=True),
     ]
 
     # Disable Textual's built-in ctrl+p command palette; we use ctrl+p for our picker.
     ENABLE_COMMAND_PALETTE = False
 
-    def __init__(self, profile_arg: str | None, otel: bool = False,
+    def __init__(self, provider_arg: str | None, otel: bool = False,
                  resume_arg: str | None = None) -> None:
         super().__init__()
-        self.profile_arg = profile_arg
+        self.provider_arg = provider_arg
         self._otel_enabled = otel
         self._resume_arg = resume_arg
         self.session: Session  # set in on_mount
@@ -179,7 +179,7 @@ class CodeyApp(App[None]):
             sid = self._resume_arg
             try:
                 self.session = Session.build_resumed(
-                    session_id=sid, profile_arg=self.profile_arg,
+                    session_id=sid, provider_arg=self.provider_arg,
                     ui_sinks=sinks, otel_enabled=self._otel_enabled,
                 )
             except SessionResumeError as e:
@@ -196,14 +196,14 @@ class CodeyApp(App[None]):
                        + ("  ⚠" if self.engine.mode == Mode.YOLO else ""))
         if self._resume_arg not in (None, "__PICK__"):
             self._log_meta(f"[resumed session {self.session.session_id}]")
-        if self._resume_arg is None and self.session.profile.needs_api_key:
+        if self._resume_arg is None and self.session.provider.needs_api_key:
             self._defer_first_run()
         self.query_one(Input).focus()
 
     def _build_fresh_session(self, sinks: UISinks) -> None:
         try:
             self.session = Session.build(
-                profile_arg=self.profile_arg,
+                provider_arg=self.provider_arg,
                 ui_sinks=sinks,
                 otel_enabled=self._otel_enabled,
             )
@@ -215,7 +215,7 @@ class CodeyApp(App[None]):
                 self._log_error(str(e))
                 # Fall back to building without OTel so the rest of the TUI works.
                 self.session = Session.build(
-                    profile_arg=self.profile_arg,
+                    provider_arg=self.provider_arg,
                     ui_sinks=sinks,
                     otel_enabled=False,
                 )
@@ -264,10 +264,10 @@ class CodeyApp(App[None]):
         self.exit()
 
     async def _cmd_model(self) -> None:
-        # Reads from self.agent.profile, which is updated live by swap_profile,
+        # Reads from self.agent.provider, which is updated live by swap_provider,
         # so this always reflects the current runtime.
-        p = self.agent.profile
-        self._log_meta(f"profile  : {p.name}")
+        p = self.agent.provider
+        self._log_meta(f"provider  : {p.name}")
         self._log_meta(f"model    : {p.model}")
         self._log_meta(f"base_url : {p.base_url}")
         self._log_meta(f"workspace: {self.workspace}")
@@ -401,39 +401,39 @@ class CodeyApp(App[None]):
             desc = s.description if s else ""
             self._log_meta(f"  [{tier:<7}] {name:<{width}}  {desc}")
 
-    async def _cmd_profiles_list(self) -> None:
-        active = self.agent.profile.name
-        for name in sorted(self.cfg.profiles):
-            p = self.cfg.profiles[name]
+    async def _cmd_providers_list(self) -> None:
+        active = self.agent.provider.name
+        for name in sorted(self.cfg.providers):
+            p = self.cfg.providers[name]
             mark = "*" if name == active else " "
             self._log_meta(f"  {mark} {name:<20} {p.model:<25} {p.base_url}")
 
-    async def _cmd_profile_switch(self, arg: str) -> None:
+    async def _cmd_provider_switch(self, arg: str) -> None:
         arg = arg.strip()
         if arg:
-            await self._switch_profile(arg)
+            await self._switch_provider(arg)
         else:
             # push_screen_wait requires a worker context — launch one.
-            self._open_profile_picker()
+            self._open_provider_picker()
 
-    def _open_profile_picker(self) -> None:
+    def _open_provider_picker(self) -> None:
         """Schedule the picker modal as a worker (required by push_screen_wait)."""
         async def _pick() -> None:
             chosen = await self.push_screen_wait(
-                ProfilePickerScreen(self.cfg, self.agent.profile.name)
+                ProviderPickerScreen(self.cfg, self.agent.provider.name)
             )
             if chosen:
-                await self._switch_profile(chosen)
-        self.run_worker(_pick(), exclusive=True, group="profile-picker")
+                await self._switch_provider(chosen)
+        self.run_worker(_pick(), exclusive=True, group="provider-picker")
 
-    async def _switch_profile(self, name: str) -> None:
+    async def _switch_provider(self, name: str) -> None:
         try:
-            new_profile = await self.session.swap_profile(name)
+            new_provider = await self.session.swap_provider(name)
         except RuntimeError as e:
             self._log_error(str(e))
             return
         self._refresh_title()
-        self._log_meta(f"(switched to {new_profile.name}: {new_profile.model})")
+        self._log_meta(f"(switched to {new_provider.name}: {new_provider.model})")
 
     # -- session resume --
 
@@ -446,7 +446,7 @@ class CodeyApp(App[None]):
                 return
             try:
                 new_sess = Session.build_resumed(
-                    session_id=picked, profile_arg=self.profile_arg,
+                    session_id=picked, provider_arg=self.provider_arg,
                     ui_sinks=sinks, otel_enabled=self._otel_enabled,
                 )
             except Exception as e:  # noqa: BLE001
@@ -461,22 +461,22 @@ class CodeyApp(App[None]):
         self.run_worker(_go(), exclusive=False, group="resume-picker")
 
     def _defer_first_run(self) -> None:
-        """First-run key prompt when the active profile has the placeholder key.
+        """First-run key prompt when the active provider has the placeholder key.
         Submitting writes it into config.toml + reloads; skipping just notes
         where the config lives. push_screen_wait requires a worker context."""
-        from ..config import CONFIG_PATH, ConfigFile, set_profile_api_key
+        from ..config import CONFIG_PATH, ConfigFile, set_provider_api_key
         from dataclasses import replace
         from .modals.first_run import FirstRunScreen
 
         async def _go() -> None:
             key = await self.push_screen_wait(FirstRunScreen(CONFIG_PATH))
-            name = self.session.profile.name
+            name = self.session.provider.name
             if not key:
                 self._log_meta(f"no key set — calls will fail until you edit {CONFIG_PATH}")
                 return
-            set_profile_api_key(name, key)
-            self.session.cfg.profiles[name] = replace(self.session.cfg.profiles[name], api_key=key)
-            await self.session.swap_profile(name)
+            set_provider_api_key(name, key)
+            self.session.cfg.providers[name] = replace(self.session.cfg.providers[name], api_key=key)
+            await self.session.swap_provider(name)
             self._refresh_title()
             self._log_meta(f"deepseek key saved to {CONFIG_PATH}")
         self.run_worker(_go(), exclusive=False, group="first-run")
@@ -569,7 +569,7 @@ class CodeyApp(App[None]):
         return self.query_one("#transcript", RichLog)
 
     def _refresh_title(self) -> None:
-        p = self.agent.profile
+        p = self.agent.provider
         self.title = "codey"
         mode_str = self.engine.mode.value.upper()
         # Show workspace basename so the header stays short; full path is in
@@ -596,9 +596,9 @@ class CodeyApp(App[None]):
         self.agent.reset()
         self._log_meta("(history cleared)")
 
-    async def action_profile(self) -> None:
+    async def action_provider(self) -> None:
         # ctrl+p → open the picker modal (runs in a worker so push_screen_wait works)
-        self._open_profile_picker()
+        self._open_provider_picker()
 
     # -- input handling: search-as-you-type slash dropdown --
 
@@ -726,9 +726,9 @@ class CodeyApp(App[None]):
             event.stop()
 
 
-def run(profile_arg: str | None, otel: bool = False,
+def run(provider_arg: str | None, otel: bool = False,
         resume_arg: str | None = None) -> None:
-    app = CodeyApp(profile_arg=profile_arg, otel=otel, resume_arg=resume_arg)
+    app = CodeyApp(provider_arg=provider_arg, otel=otel, resume_arg=resume_arg)
     app.run()
 
 
@@ -737,8 +737,8 @@ def main() -> None:
     from ..hooks.builtin import otel_enabled as _otel_env_enabled
     parser = argparse.ArgumentParser(prog="codey", description="codey — a coding agent")
     parser.add_argument(
-        "--profile", "-p",
-        help="profile name from ~/.config/codey/config.toml (overrides $CODEY_PROFILE)",
+        "--provider", "-p",
+        help="provider name from ~/.config/codey/config.toml (overrides $CODEY_PROVIDER)",
     )
     parser.add_argument(
         "--resume", "-r",
@@ -759,4 +759,4 @@ def main() -> None:
     # or the config.toml [otel] block (loaded inside Session.build via the
     # already-resolved config — but for the CLI flag we just OR them).
     otel_on = args.otel or _otel_env_enabled()
-    run(args.profile, otel=otel_on, resume_arg=args.resume)
+    run(args.provider, otel=otel_on, resume_arg=args.resume)

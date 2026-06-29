@@ -1,4 +1,4 @@
-"""Arrow-key profile picker modal. Returns the chosen profile name or None."""
+"""Arrow-key provider picker modal. Returns the chosen provider name or None."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ from textual.widgets.option_list import Option
 from ...config import ConfigFile
 
 
-class ProfilePickerScreen(ModalScreen[str | None]):
+class ProviderPickerScreen(ModalScreen[str | None]):
     BINDINGS = [Binding("escape", "cancel", "cancel")]
 
     DEFAULT_CSS = """
-    ProfilePickerScreen { align: center middle; }
+    ProviderPickerScreen { align: center middle; }
     #picker-box {
         width: 80; max-width: 90%;
         max-height: 60%;
@@ -36,11 +36,11 @@ class ProfilePickerScreen(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="picker-box"):
-            yield Static("switch profile", id="picker-title")
+            yield Static("switch provider", id="picker-title")
             options = []
             initial_index = 0
-            for i, name in enumerate(sorted(self.cfg.profiles)):
-                p = self.cfg.profiles[name]
+            for i, name in enumerate(sorted(self.cfg.providers)):
+                p = self.cfg.providers[name]
                 mark = "[bold]*[/] " if name == self.active else "  "
                 label = f"{mark}{name}  [dim]{p.model} @ {p.base_url}[/]"
                 options.append(Option(label, id=name))

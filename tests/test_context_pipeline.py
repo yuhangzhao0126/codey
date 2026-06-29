@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from codey.config import Profile
+from codey.config import Provider
 from codey.context import pipeline as pipeline_mod
 from codey.context.pipeline import PARENT_THRESHOLDS, CHILD_THRESHOLDS, Thresholds
 from codey.core.messages import Message
@@ -11,8 +11,8 @@ from codey.core.messages import Message
 from _fake_openai import FakeClient
 
 
-def _profile(window=100_000, headroom=13_000) -> Profile:
-    return Profile(name="p", api_key="k", base_url="x", model="m",
+def _provider(window=100_000, headroom=13_000) -> Provider:
+    return Provider(name="p", api_key="k", base_url="x", model="m",
                    context_window=window, max_output_tokens=4_096,
                    compact_headroom=headroom)
 
@@ -24,7 +24,7 @@ async def test_run_proactive_small_history_is_no_op(tmp_path, monkeypatch):
             Message(role="user", content="hi")]
     metas = []
     await pipeline_mod.run_proactive(
-        history=hist, profile=_profile(), session_id="sid",
+        history=hist, provider=_provider(), session_id="sid",
         last_round_tool_idxs=[], meta=metas.append,
         client=FakeClient(response_text="x"), recent_files=[],
     )
@@ -47,7 +47,7 @@ async def test_run_proactive_runs_budget_then_snip_then_micro(tmp_path, monkeypa
 
     metas = []
     await pipeline_mod.run_proactive(
-        history=hist, profile=_profile(), session_id="sid",
+        history=hist, provider=_provider(), session_id="sid",
         last_round_tool_idxs=last_round_idxs, meta=metas.append,
         client=FakeClient(response_text="x"), recent_files=[],
     )
@@ -66,7 +66,7 @@ async def test_run_proactive_triggers_llm_when_over_threshold(tmp_path, monkeypa
             Message(role="user", content="A" * 20_000)]
     metas = []
     await pipeline_mod.run_proactive(
-        history=hist, profile=_profile(window=10_000, headroom=1_000),
+        history=hist, provider=_provider(window=10_000, headroom=1_000),
         session_id="sid", last_round_tool_idxs=[], meta=metas.append,
         client=FakeClient(response_text="summary"), recent_files=[],
     )
@@ -83,7 +83,7 @@ async def test_run_proactive_force_summary_skips_threshold(tmp_path, monkeypatch
             Message(role="user", content="tiny")]
     metas = []
     await pipeline_mod.run_proactive_force_summary(
-        history=hist, profile=_profile(), session_id="sid",
+        history=hist, provider=_provider(), session_id="sid",
         meta=metas.append, client=FakeClient(response_text="summary"),
         recent_files=[],
     )
@@ -103,7 +103,7 @@ async def test_run_reactive_delegates_to_reactive_run(tmp_path, monkeypatch):
     hist = [Message(role="system", content="s")] + \
            [Message(role="user", content=f"u{i}") for i in range(20)]
     await pipeline_mod.run_reactive(
-        history=hist, profile=_profile(), session_id="sid",
+        history=hist, provider=_provider(), session_id="sid",
         meta=lambda _m: None,
         client=FakeClient(response_text="reactive summary"), recent_files=[],
     )

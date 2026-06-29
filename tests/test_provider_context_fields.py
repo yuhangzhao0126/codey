@@ -1,4 +1,4 @@
-"""Tests for the new Profile context-management fields."""
+"""Tests for the new Provider context-management fields."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,9 +25,9 @@ def test_defaults_are_documented_values():
 def test_overrides_in_config(tmp_path: Path, monkeypatch):
     cfg_path = tmp_path / "config.toml"
     cfg_path.write_text(
-        'default_profile = "small"\n'
+        'default_provider = "small"\n'
         "\n"
-        "[profiles.small]\n"
+        "[providers.small]\n"
         'base_url = "https://example/v1"\n'
         'api_key  = "k"\n'
         'model    = "tiny"\n'
@@ -36,7 +36,7 @@ def test_overrides_in_config(tmp_path: Path, monkeypatch):
         "compact_headroom  = 2000\n"
     )
     monkeypatch.setattr("codey.config.CONFIG_PATH", cfg_path)
-    for k in ("CODEY_API_KEY", "CODEY_BASE_URL", "CODEY_MODEL", "CODEY_PROFILE"):
+    for k in ("CODEY_API_KEY", "CODEY_BASE_URL", "CODEY_MODEL", "CODEY_PROVIDER"):
         monkeypatch.delenv(k, raising=False)
     p = ConfigFile.load().resolve("small")
     assert p.context_window == 32000
@@ -47,16 +47,16 @@ def test_overrides_in_config(tmp_path: Path, monkeypatch):
 def test_partial_override(tmp_path: Path, monkeypatch):
     cfg_path = tmp_path / "config.toml"
     cfg_path.write_text(
-        'default_profile = "p"\n'
+        'default_provider = "p"\n'
         "\n"
-        "[profiles.p]\n"
+        "[providers.p]\n"
         'base_url = "x"\n'
         'api_key  = "k"\n'
         'model    = "m"\n'
         "context_window = 16000\n"
     )
     monkeypatch.setattr("codey.config.CONFIG_PATH", cfg_path)
-    for k in ("CODEY_API_KEY", "CODEY_BASE_URL", "CODEY_MODEL", "CODEY_PROFILE"):
+    for k in ("CODEY_API_KEY", "CODEY_BASE_URL", "CODEY_MODEL", "CODEY_PROVIDER"):
         monkeypatch.delenv(k, raising=False)
     p = ConfigFile.load().resolve("p")
     assert p.context_window == 16000

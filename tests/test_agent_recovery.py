@@ -13,14 +13,14 @@ from codey.core import (
     Message,
     TurnCompleted,
 )
-from codey.config import Profile
+from codey.config import Provider
 
 
 def _agent() -> Agent:
     """Build an Agent without touching the real API.
     We stub `_stream_one_round` per-test to control what comes back."""
     return Agent(
-        profile=Profile(name="t", api_key="sk", base_url="http://x/v1", model="m"),
+        provider=Provider(name="t", api_key="sk", base_url="http://x/v1", model="m"),
         system_prompt="",
     )
 

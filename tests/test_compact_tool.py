@@ -5,7 +5,7 @@ from collections import deque
 
 import pytest
 
-from codey.config import Profile
+from codey.config import Provider
 from codey.core.messages import Message
 from codey.core.turn import Agent
 from codey.tools.compact import CompactTool
@@ -13,8 +13,8 @@ from codey.tools.compact import CompactTool
 from _fake_openai import FakeClient
 
 
-def _profile():
-    return Profile(name="p", api_key="k", base_url="x", model="m",
+def _provider():
+    return Provider(name="p", api_key="k", base_url="x", model="m",
                    context_window=100_000, max_output_tokens=4_096,
                    compact_headroom=13_000)
 
@@ -23,7 +23,7 @@ def _profile():
 async def test_compact_tool_returns_canonical_string(tmp_path, monkeypatch):
     monkeypatch.setattr("codey.context.transcripts._CACHE_ROOT", tmp_path)
 
-    agent = Agent(profile=_profile(), session_id="sid")
+    agent = Agent(provider=_provider(), session_id="sid")
     agent.history.extend([Message(role="user", content="hi")])
     # Force the client to be our fake so the summary call doesn't go out.
     agent._client = FakeClient(response_text="summary text")

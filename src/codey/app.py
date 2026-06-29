@@ -1,18 +1,22 @@
-"""Single entry point for codey. Launches the Textual UI."""
+"""Single entry point for codey. Launches the Textual UI, or headless with -p."""
 
 from __future__ import annotations
 
 import argparse
-
-from .ui.app import CodeyApp
+import asyncio
+import sys
 
 
 def main() -> None:
     from .hooks.builtin import otel_enabled as _otel_env_enabled
     parser = argparse.ArgumentParser(prog="codey", description="codey — a coding agent")
     parser.add_argument(
-        "--profile", "-p",
-        help="profile name from ~/.config/codey/config.toml (overrides $CODEY_PROFILE)",
+        "--prompt", "-p",
+        help="run one prompt headless (no TUI), print result, exit — for eval/scripting",
+    )
+    parser.add_argument(
+        "--provider",
+        help="provider name from ~/.config/codey/config.toml (overrides $CODEY_PROVIDER)",
     )
     parser.add_argument(
         "--resume", "-r",
@@ -30,7 +34,11 @@ def main() -> None:
     )
     args = parser.parse_args()
     otel_on = args.otel or _otel_env_enabled()
-    CodeyApp(profile_arg=args.profile, resume_arg=args.resume, otel=otel_on).run()
+    if args.prompt:
+        from .headless import run_headless
+        sys.exit(asyncio.run(run_headless(args.prompt, provider_arg=args.provider, otel=otel_on)))
+    from .ui.app import CodeyApp
+    CodeyApp(provider_arg=args.provider, resume_arg=args.resume, otel=otel_on).run()
 
 
 if __name__ == "__main__":

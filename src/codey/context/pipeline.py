@@ -16,7 +16,7 @@ from typing import Callable, Iterable
 
 from openai import AsyncOpenAI
 
-from ..config import Profile
+from ..config import Provider
 from ..core.messages import Message
 from . import budget as _budget
 from . import llm as _llm
@@ -54,8 +54,8 @@ CHILD_THRESHOLDS = Thresholds(
 )
 
 
-def _should_llm_compact(history: list[Message], profile: Profile) -> bool:
-    threshold = profile.context_window - profile.max_output_tokens - profile.compact_headroom
+def _should_llm_compact(history: list[Message], provider: Provider) -> bool:
+    threshold = provider.context_window - provider.max_output_tokens - provider.compact_headroom
     return _tokens.estimate(history) > max(threshold, 0)
 
 
@@ -110,7 +110,7 @@ def _micro_with(*, history, meta, thresholds: Thresholds) -> int:
 async def run_proactive(
     *,
     history: list[Message],
-    profile: Profile,
+    provider: Provider,
     session_id: str,
     last_round_tool_idxs: list[int],
     meta: MetaSink | None,
@@ -125,9 +125,9 @@ async def run_proactive(
     )
     _snip_with(history=history, meta=meta, thresholds=thresholds)
     _micro_with(history=history, meta=meta, thresholds=thresholds)
-    if _should_llm_compact(history, profile):
+    if _should_llm_compact(history, provider):
         await _llm.run(
-            history=history, profile=profile, session_id=session_id,
+            history=history, provider=provider, session_id=session_id,
             meta=meta, client=client, recent_files=list(recent_files),
         )
 
@@ -135,7 +135,7 @@ async def run_proactive(
 async def run_proactive_force_summary(
     *,
     history: list[Message],
-    profile: Profile,
+    provider: Provider,
     session_id: str,
     meta: MetaSink | None,
     client: AsyncOpenAI,
@@ -148,7 +148,7 @@ async def run_proactive_force_summary(
     _snip_with(history=history, meta=meta, thresholds=thresholds)
     _micro_with(history=history, meta=meta, thresholds=thresholds)
     await _llm.run(
-        history=history, profile=profile, session_id=session_id,
+        history=history, provider=provider, session_id=session_id,
         meta=meta, client=client, recent_files=list(recent_files),
     )
 
@@ -156,7 +156,7 @@ async def run_proactive_force_summary(
 async def run_reactive(
     *,
     history: list[Message],
-    profile: Profile,
+    provider: Provider,
     session_id: str,
     meta: MetaSink | None,
     client: AsyncOpenAI,
@@ -164,6 +164,6 @@ async def run_reactive(
 ) -> None:
     """Wrapper around reactive.run so callers import from one place."""
     await _reactive.run(
-        history=history, profile=profile, session_id=session_id,
+        history=history, provider=provider, session_id=session_id,
         meta=meta, client=client, recent_files=list(recent_files),
     )

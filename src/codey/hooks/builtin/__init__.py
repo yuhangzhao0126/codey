@@ -117,7 +117,7 @@ def build_default_hooks(
     if otel is not None:
         cbs = build_otel_hooks(
             session_id=session_id or "",
-            profile_name=otel["profile_name"],
+            provider_name=otel["provider_name"],
             model=otel["model"],
             base_url=otel["base_url"],
             service_name=otel.get("service_name"),

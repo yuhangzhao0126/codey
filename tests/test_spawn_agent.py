@@ -13,7 +13,7 @@ import pytest
 from codey.core import Agent, AssistantTextDelta, Message, ToolResult, TurnCompleted
 from codey.core.agent import ToolRegistry
 from codey.core.session import Session
-from codey.config import Profile
+from codey.config import Provider
 from codey.tools.spawn_agent import SpawnAgentTool
 from codey.ui.renderers import UISinks
 
@@ -25,7 +25,7 @@ def _session(tmp_path: Path) -> Session:
         todo_writer=None,
     )
     return Session.build(
-        profile_arg=None,
+        provider_arg=None,
         ui_sinks=sinks,
         workspace=tmp_path,
         otel_enabled=False,
@@ -56,14 +56,14 @@ async def test_spawn_agent_returns_final_assistant_text(
         await sess.aclose()
 
 
-async def test_spawn_agent_unknown_profile_returns_error(temp_config, tmp_path):
+async def test_spawn_agent_unknown_provider_returns_error(temp_config, tmp_path):
     sess = _session(tmp_path)
     try:
         tool = SpawnAgentTool(session_provider=lambda: sess)
         result = await tool.run({
-            "description": "x", "prompt": "y", "profile": "ghost-profile",
+            "description": "x", "prompt": "y", "provider": "ghost-provider",
         })
-        assert result.startswith("error: unknown profile")
+        assert result.startswith("error: unknown provider")
     finally:
         await sess.aclose()
 

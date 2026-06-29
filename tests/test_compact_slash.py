@@ -35,7 +35,7 @@ async def test_compact_command_calls_compact_now(monkeypatch):
 
     monkeypatch.setattr(Agent, "compact_now", fake_compact_now)
 
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/compact")
     assert called == [True]

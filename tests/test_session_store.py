@@ -12,7 +12,7 @@ def test_session_meta_roundtrip(tmp_path: Path) -> None:
     meta = SessionMeta(
         session_id="abc12345",
         workspace=str(tmp_path),
-        profile="alpha",
+        provider="alpha",
         started_at="2026-06-13T14:00:00",
         last_at="2026-06-13T14:02:00",
         title="hello",
@@ -27,7 +27,7 @@ def test_session_meta_roundtrip(tmp_path: Path) -> None:
 def test_session_meta_load_preserves_unknown_keys(tmp_path: Path) -> None:
     path = tmp_path / "meta.json"
     path.write_text(
-        '{"session_id":"x","workspace":"/w","profile":"p","started_at":"t",'
+        '{"session_id":"x","workspace":"/w","provider":"p","started_at":"t",'
         '"last_at":"t","title":"","message_count":0,"future_key":"keep me"}'
     )
     loaded = SessionMeta.load(path)
@@ -39,7 +39,7 @@ def test_session_meta_load_preserves_unknown_keys(tmp_path: Path) -> None:
 
 def test_session_store_append_and_load(tmp_path: Path) -> None:
     store = SessionStore(session_id="aaa11111", root=tmp_path)
-    store.save_meta(workspace=str(tmp_path), profile="alpha",
+    store.save_meta(workspace=str(tmp_path), provider="alpha",
                     started_at="2026-06-13T14:00:00")
     store.append_message(Message(role="system", content="sys"))
     store.append_message(Message(role="user", content="hello"))
@@ -52,7 +52,7 @@ def test_session_store_append_and_load(tmp_path: Path) -> None:
 
 def test_session_store_load_history_truncated_last_line(tmp_path: Path) -> None:
     store = SessionStore(session_id="bbb22222", root=tmp_path)
-    store.save_meta(workspace=str(tmp_path), profile="p", started_at="t")
+    store.save_meta(workspace=str(tmp_path), provider="p", started_at="t")
     store.append_message(Message(role="user", content="ok"))
     with store._messages_path.open("a", encoding="utf-8") as f:
         f.write('{"role":"assistant","content":"truncat')
@@ -67,7 +67,7 @@ def test_list_for_workspace_filters_and_sorts(tmp_path: Path) -> None:
         ("b33", str(tmp_path / "B"), "2026-06-13T11:00:00"),
     ]:
         s = SessionStore(session_id=sid, root=tmp_path)
-        s.save_meta(workspace=ws, profile="p", started_at=last)
+        s.save_meta(workspace=ws, provider="p", started_at=last)
         s.touch_meta(last_at=last, message_count=1)
 
     listed = SessionStore.list_for_workspace(str(tmp_path / "A"), root=tmp_path)

@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from codey.config import Profile
+from codey.config import Provider
 from codey.context import llm as llm_mod
 from codey.core.messages import Message
 
@@ -54,8 +54,8 @@ class FakeClient:
         self.chat.completions = FakeChatCompletions(response_text=response_text)
 
 
-def _profile() -> Profile:
-    return Profile(name="p", api_key="k", base_url="https://x",
+def _provider() -> Provider:
+    return Provider(name="p", api_key="k", base_url="https://x",
                    model="m", context_window=100_000,
                    max_output_tokens=4_096, compact_headroom=13_000)
 
@@ -72,7 +72,7 @@ async def test_compact_replaces_history_with_system_plus_summary(tmp_path, monke
     client = FakeClient(response_text="user wants X; we're doing Y")
     metas = []
     ok = await llm_mod.run(
-        history=history, profile=_profile(), session_id="sid",
+        history=history, provider=_provider(), session_id="sid",
         meta=metas.append, client=client, recent_files=[],
     )
     assert ok is True
@@ -96,7 +96,7 @@ async def test_compact_reads_recent_files(tmp_path, monkeypatch):
                Message(role="user", content="hi")]
     client = FakeClient(response_text="summary")
     await llm_mod.run(
-        history=history, profile=_profile(), session_id="sid",
+        history=history, provider=_provider(), session_id="sid",
         meta=lambda _m: None, client=client, recent_files=[f1, f2],
     )
     body = history[1].content
@@ -113,7 +113,7 @@ async def test_compact_handles_missing_recent_file(tmp_path, monkeypatch):
     history = [Message(role="user", content="hi")]
     client = FakeClient(response_text="summary")
     await llm_mod.run(
-        history=history, profile=_profile(), session_id="sid",
+        history=history, provider=_provider(), session_id="sid",
         meta=lambda _m: None, client=client, recent_files=[missing],
     )
     assert "(error:" in history[0].content
@@ -126,7 +126,7 @@ async def test_compact_writes_snapshot_file(tmp_path, monkeypatch):
                Message(role="user", content="u")]
     client = FakeClient(response_text="ok")
     await llm_mod.run(
-        history=history, profile=_profile(), session_id="sid",
+        history=history, provider=_provider(), session_id="sid",
         meta=lambda _m: None, client=client, recent_files=[],
     )
     snaps = list((tmp_path / "transcripts" / "sid" / "snapshots").iterdir())
@@ -147,7 +147,7 @@ async def test_compact_caps_at_max_files(tmp_path, monkeypatch):
     history = [Message(role="user", content="hi")]
     client = FakeClient(response_text="summary")
     await llm_mod.run(
-        history=history, profile=_profile(), session_id="sid",
+        history=history, provider=_provider(), session_id="sid",
         meta=lambda _m: None, client=client, recent_files=files,
     )
     body = history[0].content

@@ -12,7 +12,7 @@ from textual.widgets import Input, Static
 
 
 class FirstRunScreen(ModalScreen[str | None]):
-    """Shown when the active profile still has the placeholder API key."""
+    """Shown when the active provider still has the placeholder API key."""
 
     BINDINGS = [Binding("escape", "skip", "skip")]
 

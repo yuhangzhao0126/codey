@@ -12,7 +12,7 @@ from typing import Any, AsyncIterator
 
 from openai import AsyncOpenAI
 
-from ..config import Profile
+from ..config import Provider
 from ..context.errors import PromptTooLongError, sniff as _sniff_provider_error
 from .events import AssistantTextDelta
 from .messages import Message
@@ -26,7 +26,7 @@ class RoundDone:
 
 async def stream_one_round(
     client: AsyncOpenAI,
-    profile: Profile,
+    provider: Provider,
     history: list[Message],
     tool_schemas: list[dict[str, Any]],
 ) -> AsyncIterator[AssistantTextDelta | RoundDone]:
@@ -37,7 +37,7 @@ async def stream_one_round(
     fragments the API streamed.
     """
     kwargs: dict[str, Any] = {
-        "model": profile.model,
+        "model": provider.model,
         "messages": [m.to_wire() for m in history],
         "stream": True,
     }

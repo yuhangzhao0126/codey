@@ -2,7 +2,7 @@
 
 Pure data + dispatch — handlers are bound at construction time as closures
 over the CodeyApp instance. Substring-match resolution: typing `/pro` resolves
-to `/profile` if it's the unique match.
+to `/provider` if it's the unique match.
 """
 
 from __future__ import annotations
@@ -30,12 +30,12 @@ def build_slash_commands() -> dict[str, SlashCommand]:
                      lambda app, _: app._cmd_help()),
         SlashCommand("reset",      "clear chat history (keeps system prompt)",
                      lambda app, _: app._cmd_reset()),
-        SlashCommand("model",      "show the active model / profile / base_url",
+        SlashCommand("model",      "show the active model / provider / base_url",
                      lambda app, _: app._cmd_model()),
-        SlashCommand("profiles",   "list available profiles",
-                     lambda app, _: app._cmd_profiles_list()),
-        SlashCommand("profile",    "switch profile: /profile [name]",
-                     lambda app, arg: app._cmd_profile_switch(arg)),
+        SlashCommand("providers",   "list available providers",
+                     lambda app, _: app._cmd_providers_list()),
+        SlashCommand("provider",    "switch provider: /provider [name]",
+                     lambda app, arg: app._cmd_provider_switch(arg)),
         SlashCommand("permission", "permission mode picker; subcommands: status, list, mode <name>",
                      lambda app, arg: app._cmd_permission(arg)),
         SlashCommand("hooks",      "list / enable / disable hooks: /hooks [enable|disable <name>]",

@@ -30,7 +30,7 @@ from typing import Any, AsyncIterator, Callable
 from openai import AsyncOpenAI
 
 from .. import context as context_pipeline
-from ..config import Profile
+from ..config import Provider
 from ..context.errors import PromptTooLongError
 from ..hooks import HookEvent, HookRegistry
 from . import history as history_mod
@@ -56,7 +56,7 @@ MAX_ROUNDS = 10  # safety cap on tool-use loops
 
 @dataclass
 class Agent:
-    profile: Profile
+    provider: Provider
     system_prompt: str = ""
     tools: ToolRegistry = field(default_factory=ToolRegistry)
     hooks: HookRegistry = field(default_factory=HookRegistry)
@@ -73,7 +73,7 @@ class Agent:
     _client: AsyncOpenAI = field(init=False)
 
     def __post_init__(self) -> None:
-        self._client = self._build_client(self.profile)
+        self._client = self._build_client(self.provider)
         sys_msg = Message(role="system", content=self._compose_system_message())
         self._append_history(sys_msg)
 
@@ -117,8 +117,8 @@ class Agent:
         questions like 'what model are you?' accurately."""
         runtime_note = (
             f"You are being served via the OpenAI-compatible API at "
-            f"`{self.profile.base_url}` as model `{self.profile.model}` "
-            f"(profile: `{self.profile.name}`). When the user asks what model "
+            f"`{self.provider.base_url}` as model `{self.provider.model}` "
+            f"(provider: `{self.provider.name}`). When the user asks what model "
             f"or provider you are, answer from this information."
         )
         if self.system_prompt:
@@ -180,7 +180,7 @@ class Agent:
                 try:
                     await context_pipeline.run_proactive(
                         history=self.history,
-                        profile=self.profile,
+                        provider=self.provider,
                         session_id=self.session_id,
                         last_round_tool_idxs=last_round_tool_idxs,
                         meta=self._meta,
@@ -209,7 +209,7 @@ class Agent:
                         try:
                             await context_pipeline.run_reactive(
                                 history=self.history,
-                                profile=self.profile,
+                                provider=self.provider,
                                 session_id=self.session_id,
                                 meta=self._meta,
                                 client=self._client,
@@ -350,18 +350,18 @@ class Agent:
         if todo_tool is not None and hasattr(todo_tool, "todos"):
             todo_tool.todos = []
 
-    async def swap_profile(self, profile: Profile) -> None:
+    async def swap_provider(self, provider: Provider) -> None:
         """Switch provider/model live. Keeps chat history; closes the old client.
         Rebuilds the system message so the in-prompt runtime note (base_url +
-        model + profile name) reflects the new profile.
+        model + provider name) reflects the new provider.
 
         Caveat: existing history may include provider-specific fields (tool_calls,
         etc.) that the new model handles differently. If the next `run()` fails,
         call `reset()` and try again.
         """
         old = self._client
-        self.profile = profile
-        self._client = self._build_client(profile)
+        self.provider = provider
+        self._client = self._build_client(provider)
 
         # Refresh the in-history system message so the model knows where it's running.
         new_system = self._compose_system_message()
@@ -391,7 +391,7 @@ class Agent:
         """Force-compact history right now. Used by the /compact slash command."""
         await context_pipeline.run_proactive_force_summary(
             history=self.history,
-            profile=self.profile,
+            provider=self.provider,
             session_id=self.session_id,
             meta=self._meta,
             client=self._client,
@@ -403,15 +403,15 @@ class Agent:
     # -- internals --
 
     @staticmethod
-    def _build_client(profile: Profile) -> AsyncOpenAI:
-        return AsyncOpenAI(api_key=profile.api_key, base_url=profile.base_url)
+    def _build_client(provider: Provider) -> AsyncOpenAI:
+        return AsyncOpenAI(api_key=provider.api_key, base_url=provider.base_url)
 
     async def _stream_one_round(self) -> AsyncIterator[AssistantTextDelta | "streaming_mod.RoundDone"]:
         """Thin wrapper around core.streaming.stream_one_round so tests can
         monkeypatch the per-instance method. Yields AssistantTextDelta and
         exactly one RoundDone sentinel."""
         async for ev in streaming_mod.stream_one_round(
-            self._client, self.profile, self.history, self.tools.schemas()
+            self._client, self.provider, self.history, self.tools.schemas()
         ):
             yield ev
 

@@ -46,7 +46,7 @@ def _mk(name: str, description: str, tier: str = "user") -> Skill:
 
 
 async def test_skills_empty_says_so():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         _seed(app, [])
         await _submit(pilot, "/skills")
@@ -55,7 +55,7 @@ async def test_skills_empty_says_so():
 
 
 async def test_skills_lists_each_with_tier_and_description():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         _seed(app, [
             _mk("alpha", "Alpha skill description.", tier="package"),
@@ -77,7 +77,7 @@ async def test_skills_lists_each_with_tier_and_description():
 
 
 async def test_skills_appears_in_help():
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         await _submit(pilot, "/help")
         text = _transcript_text(app)
@@ -86,7 +86,7 @@ async def test_skills_appears_in_help():
 
 async def test_skil_resolves_to_skills():
     """Substring matcher resolves /skil to /skills uniquely."""
-    app = CodeyApp(profile_arg=None)
+    app = CodeyApp(provider_arg=None)
     async with app.run_test() as pilot:
         _seed(app, [_mk("foo", "bar")])
         await _submit(pilot, "/skil")

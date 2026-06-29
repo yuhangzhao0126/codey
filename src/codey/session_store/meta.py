@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 _KNOWN = {
-    "session_id", "workspace", "profile",
+    "session_id", "workspace", "provider",
     "started_at", "last_at", "title", "message_count",
 }
 
@@ -21,7 +21,7 @@ _KNOWN = {
 class SessionMeta:
     session_id: str
     workspace: str
-    profile: str
+    provider: str
     started_at: str
     last_at: str
     title: str = ""
@@ -33,7 +33,7 @@ class SessionMeta:
         payload: dict[str, Any] = {
             "session_id":    self.session_id,
             "workspace":     self.workspace,
-            "profile":       self.profile,
+            "provider":       self.provider,
             "started_at":    self.started_at,
             "last_at":       self.last_at,
             "title":         self.title,
@@ -53,7 +53,7 @@ class SessionMeta:
         return cls(
             session_id=data["session_id"],
             workspace=data["workspace"],
-            profile=data["profile"],
+            provider=data["provider"],
             started_at=data["started_at"],
             last_at=data["last_at"],
             title=data.get("title", ""),

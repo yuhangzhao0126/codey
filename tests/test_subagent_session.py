@@ -18,7 +18,7 @@ def _build_session(tmp_path: Path) -> Session:
         todo_writer=None,
     )
     return Session.build(
-        profile_arg=None,
+        provider_arg=None,
         ui_sinks=sinks,
         workspace=tmp_path,
         otel_enabled=False,
@@ -75,21 +75,21 @@ async def test_build_child_agent_shape(temp_config, tmp_path):
         await sess.aclose()
 
 
-async def test_build_child_agent_resolves_named_profile(temp_config, tmp_path):
+async def test_build_child_agent_resolves_named_provider(temp_config, tmp_path):
     sess = _build_session(tmp_path)
-    child, _ = sess.build_child_agent(description="x", profile_name="beta")
+    child, _ = sess.build_child_agent(description="x", provider_name="beta")
     try:
-        assert child.profile.name == "beta"
+        assert child.provider.name == "beta"
     finally:
         await child.aclose()
         await sess.aclose()
 
 
-async def test_build_child_agent_unknown_profile_raises(temp_config, tmp_path):
+async def test_build_child_agent_unknown_provider_raises(temp_config, tmp_path):
     sess = _build_session(tmp_path)
     try:
         with pytest.raises(RuntimeError):
             # cfg.resolve raises RuntimeError on unknown — surface as-is.
-            sess.build_child_agent(description="x", profile_name="ghost-profile")
+            sess.build_child_agent(description="x", provider_name="ghost-provider")
     finally:
         await sess.aclose()

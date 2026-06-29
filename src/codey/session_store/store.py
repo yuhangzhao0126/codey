@@ -49,7 +49,7 @@ class SessionStore:
         self,
         *,
         workspace: str,
-        profile: str,
+        provider: str,
         started_at: str,
         title: str = "",
         message_count: int = 0,
@@ -58,7 +58,7 @@ class SessionStore:
         meta = SessionMeta(
             session_id=self.session_id,
             workspace=workspace,
-            profile=profile,
+            provider=provider,
             started_at=started_at,
             last_at=started_at,
             title=title,
