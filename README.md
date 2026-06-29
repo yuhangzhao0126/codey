@@ -43,11 +43,20 @@ big enough to be genuinely useful for day-to-day coding tasks.
 One line — installs `uv` if needed, then codey from the latest `main`. Re-run
 to update; it seeds a placeholder config and never overwrites your own:
 
+**macOS / Linux:**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yuhangzhao0126/codey/main/install.sh | bash
 ```
 
-Then edit `~/.config/codey/config.toml` to add your API key and run `codey`.
+**Windows (PowerShell):**
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/yuhangzhao0126/codey/main/install.ps1 | iex"
+```
+
+Then edit your config (`~/.config/codey/config.toml`, or `%APPDATA%\codey\config.toml`
+on Windows) to add your API key and run `codey`.
 
 ## Setup (from source)
 
