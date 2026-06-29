@@ -196,6 +196,8 @@ class CodeyApp(App[None]):
                        + ("  ⚠" if self.engine.mode == Mode.YOLO else ""))
         if self._resume_arg not in (None, "__PICK__"):
             self._log_meta(f"[resumed session {self.session.session_id}]")
+        if self._resume_arg is None and self.session.profile.needs_api_key:
+            self._defer_first_run()
         self.query_one(Input).focus()
 
     def _build_fresh_session(self, sinks: UISinks) -> None:
@@ -457,6 +459,27 @@ class CodeyApp(App[None]):
             self._refresh_title()
             self._log_meta(f"[resumed session {picked}]")
         self.run_worker(_go(), exclusive=False, group="resume-picker")
+
+    def _defer_first_run(self) -> None:
+        """First-run key prompt when the active profile has the placeholder key.
+        Submitting writes it into config.toml + reloads; skipping just notes
+        where the config lives. push_screen_wait requires a worker context."""
+        from ..config import CONFIG_PATH, ConfigFile, set_profile_api_key
+        from dataclasses import replace
+        from .modals.first_run import FirstRunScreen
+
+        async def _go() -> None:
+            key = await self.push_screen_wait(FirstRunScreen(CONFIG_PATH))
+            name = self.session.profile.name
+            if not key:
+                self._log_meta(f"no key set — calls will fail until you edit {CONFIG_PATH}")
+                return
+            set_profile_api_key(name, key)
+            self.session.cfg.profiles[name] = replace(self.session.cfg.profiles[name], api_key=key)
+            await self.session.swap_profile(name)
+            self._refresh_title()
+            self._log_meta(f"deepseek key saved to {CONFIG_PATH}")
+        self.run_worker(_go(), exclusive=False, group="first-run")
 
     async def _cmd_resume(self, _arg: str = "") -> None:
         from ..session_store import SessionStore

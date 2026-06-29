@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from codey import config as config_mod
-from codey.config import ConfigFile, MemoryConfig, DEFAULT_MEMORY_MAX_LOADED
+from codey.config import (
+    ConfigFile, MemoryConfig, DEFAULT_MEMORY_MAX_LOADED,
+    PLACEHOLDER_API_KEY, set_profile_api_key,
+)
 
 
 def _write_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
@@ -65,3 +68,24 @@ def test_configfile_constructed_directly_has_memory_default() -> None:
     # Tests that build ConfigFile(...) without the memory kwarg still work.
     cfg = ConfigFile(default_profile="x", profiles={})
     assert cfg.memory == MemoryConfig()
+
+
+def test_needs_api_key_detects_placeholder_and_empty(tmp_path, monkeypatch) -> None:
+    _write_cfg(tmp_path, monkeypatch, "")
+    cfg = ConfigFile.load()
+    real = cfg.profiles["alpha"]
+    assert real.needs_api_key is False
+    from dataclasses import replace
+    assert replace(real, api_key=PLACEHOLDER_API_KEY).needs_api_key is True
+    assert replace(real, api_key="").needs_api_key is True
+
+
+def test_set_profile_api_key_rewrites_only_target(tmp_path, monkeypatch) -> None:
+    _write_cfg(tmp_path, monkeypatch,
+               '\n[profiles.beta]\napi_key = "sk-beta"\nmodel = "m"\n')
+    set_profile_api_key("alpha", "sk-NEW")
+    cfg = ConfigFile.load()
+    assert cfg.profiles["alpha"].api_key == "sk-NEW"
+    assert cfg.profiles["beta"].api_key == "sk-beta"
+    assert cfg.profiles["alpha"].model == "alpha-model"
+

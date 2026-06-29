@@ -30,6 +30,8 @@ DEFAULT_COMPACT_HEADROOM = 13_000
 
 DEFAULT_MEMORY_MAX_LOADED = 5
 
+PLACEHOLDER_API_KEY = "sk-..."  # what install.sh/.ps1 seed; means "not yet set"
+
 
 @dataclass(frozen=True)
 class MemoryConfig:
@@ -56,6 +58,10 @@ class Profile:
     context_window: int = DEFAULT_CONTEXT_WINDOW
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
     compact_headroom: int = DEFAULT_COMPACT_HEADROOM
+
+    @property
+    def needs_api_key(self) -> bool:
+        return not self.api_key or self.api_key == PLACEHOLDER_API_KEY
 
 
 @dataclass
@@ -171,3 +177,29 @@ def _parse_memory(raw: dict) -> MemoryConfig:
         side_query=_bool("side_query", True),
         max_loaded=max_loaded,
     )
+
+
+def set_profile_api_key(profile_name: str, api_key: str) -> None:
+    """Rewrite api_key for one [profiles.<name>] block in config.toml, in place.
+
+    Only the api_key line of that profile is touched; everything else stays.
+    No-op if the file or block is absent.
+    """
+    if not CONFIG_PATH.exists():
+        return
+    lines = CONFIG_PATH.read_text().splitlines()
+    header = f"[profiles.{profile_name}]"
+    in_block = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_block = stripped == header
+            continue
+        if in_block and stripped.startswith("api_key"):
+            lines[i] = f'api_key  = "{api_key}"'
+            break
+    CONFIG_PATH.write_text("\n".join(lines) + "\n")
+    try:
+        CONFIG_PATH.chmod(0o600)
+    except OSError:
+        pass
