@@ -50,7 +50,7 @@ def test_partial_override(tmp_path: Path, monkeypatch):
         'default_provider = "p"\n'
         "\n"
         "[providers.p]\n"
-        'base_url = "x"\n'
+        'base_url = "https://x/v1"\n'
         'api_key  = "k"\n'
         'model    = "m"\n'
         "context_window = 16000\n"

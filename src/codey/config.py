@@ -18,6 +18,7 @@ import os
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -31,6 +32,47 @@ DEFAULT_COMPACT_HEADROOM = 13_000
 DEFAULT_MEMORY_MAX_LOADED = 5
 
 PLACEHOLDER_API_KEY = "sk-..."  # what install.sh/.ps1 seed; means "not yet set"
+
+
+def _validate_base_url(provider_name: str, base_url: str) -> str:
+    """Validate base_url is a well-formed OpenAI-compatible API *root* URL.
+
+    The OpenAI SDK appends the endpoint path (e.g. `/chat/completions`) to
+    base_url itself, so base_url must be the API root — not a full endpoint.
+    A common paste mistake is copying the whole `.../v1/chat/completions` URL;
+    reject it here with a clear message instead of letting requests 404 later.
+    """
+    if not base_url or not base_url.strip():
+        raise RuntimeError(
+            f"Provider {provider_name!r} has an empty base_url. "
+            f"Set base_url in [providers.{provider_name}] at {CONFIG_PATH} "
+            "(e.g. base_url = \"https://api.openai.com/v1\")."
+        )
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise RuntimeError(
+            f"Provider {provider_name!r} has an invalid base_url: {base_url!r}. "
+            "It must be a full http(s) URL including scheme and host "
+            "(e.g. base_url = \"https://api.openai.com/v1\"). "
+            f"Fix it in [providers.{provider_name}] at {CONFIG_PATH}."
+        )
+    path = parsed.path.rstrip("/")
+    ENDPOINT_SUFFIXES = (
+        "/chat/completions", "/completions", "/responses",
+        "/embeddings", "/models",
+    )
+    for suffix in ENDPOINT_SUFFIXES:
+        if path.endswith(suffix):
+            root_path = path[: -len(suffix)] or "/"
+            suggested = parsed._replace(path=root_path).geturl()
+            raise RuntimeError(
+                f"Provider {provider_name!r} base_url points at a full endpoint, "
+                f"not the API root: {base_url!r}. codey appends the endpoint path "
+                "itself, so set base_url to the API root instead "
+                f"(e.g. base_url = \"{suggested}\"). "
+                f"Fix it in [providers.{provider_name}] at {CONFIG_PATH}."
+            )
+    return base_url
 
 
 @dataclass(frozen=True)
@@ -151,12 +193,14 @@ class ConfigFile:
         provider = self.providers[chosen]
 
         # env vars only fill in empty provider fields
-        return replace(
+        resolved = replace(
             provider,
             api_key=provider.api_key or os.environ.get("CODEY_API_KEY", ""),
             base_url=provider.base_url or os.environ.get("CODEY_BASE_URL", DEFAULT_BASE_URL),
             model=provider.model or os.environ.get("CODEY_MODEL", DEFAULT_MODEL),
         )
+        _validate_base_url(resolved.name, resolved.base_url)
+        return resolved
 
 
 def _parse_memory(raw: dict) -> MemoryConfig:

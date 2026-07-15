@@ -89,3 +89,89 @@ def test_set_provider_api_key_rewrites_only_target(tmp_path, monkeypatch) -> Non
     assert cfg.providers["beta"].api_key == "sk-beta"
     assert cfg.providers["alpha"].model == "alpha-model"
 
+
+def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k in ("CODEY_API_KEY", "CODEY_BASE_URL", "CODEY_MODEL", "CODEY_PROVIDER"):
+        monkeypatch.delenv(k, raising=False)
+
+
+@pytest.mark.parametrize("bad", ["notaurl", "ftp://host/v1", "://nohost", "http:///v1"])
+def test_resolve_rejects_malformed_base_url(tmp_path, monkeypatch, bad) -> None:
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        'default_provider = "alpha"\n\n'
+        "[providers.alpha]\n"
+        f'base_url = "{bad}"\n'
+        'api_key  = "sk-alpha"\n'
+        'model    = "alpha-model"\n'
+    )
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", cfg)
+    _clear_env(monkeypatch)
+    with pytest.raises(RuntimeError, match="invalid base_url"):
+        ConfigFile.load().resolve()
+
+
+def test_resolve_rejects_empty_base_url(tmp_path, monkeypatch) -> None:
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        'default_provider = "alpha"\n\n'
+        "[providers.alpha]\n"
+        'base_url = ""\n'
+        'api_key  = "sk-alpha"\n'
+        'model    = "alpha-model"\n'
+    )
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", cfg)
+    _clear_env(monkeypatch)
+    # empty base_url falls back to DEFAULT_BASE_URL via env logic → still valid,
+    # so force the env fallback empty too to hit the empty-url branch.
+    monkeypatch.setenv("CODEY_BASE_URL", "")
+    with pytest.raises(RuntimeError, match="base_url"):
+        ConfigFile.load().resolve()
+
+
+def test_resolve_accepts_valid_base_url(tmp_path, monkeypatch) -> None:
+    _write_cfg(tmp_path, monkeypatch, "")
+    _clear_env(monkeypatch)
+    p = ConfigFile.load().resolve()
+    assert p.base_url == "https://example.com/alpha/v1"
+
+
+@pytest.mark.parametrize("endpoint,root", [
+    ("https://api.x.com/v1/chat/completions", "https://api.x.com/v1"),
+    ("https://api.x.com/v1/completions", "https://api.x.com/v1"),
+    ("https://api.x.com/v1/embeddings", "https://api.x.com/v1"),
+    ("https://api.x.com/v1/models", "https://api.x.com/v1"),
+    ("https://api.x.com/openai/v1/chat/completions", "https://api.x.com/openai/v1"),
+    ("https://api.x.com/chat/completions/", "https://api.x.com/"),
+])
+def test_resolve_rejects_full_endpoint_and_suggests_root(
+    tmp_path, monkeypatch, endpoint, root
+) -> None:
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        'default_provider = "alpha"\n\n'
+        "[providers.alpha]\n"
+        f'base_url = "{endpoint}"\n'
+        'api_key  = "sk-alpha"\n'
+        'model    = "alpha-model"\n'
+    )
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", cfg)
+    _clear_env(monkeypatch)
+    with pytest.raises(RuntimeError, match="full endpoint") as exc:
+        ConfigFile.load().resolve()
+    assert f'base_url = "{root}"' in str(exc.value)
+
+
+def test_resolve_accepts_api_root_with_v1(tmp_path, monkeypatch) -> None:
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        'default_provider = "alpha"\n\n'
+        "[providers.alpha]\n"
+        'base_url = "https://api.deepseek.com/v1"\n'
+        'api_key  = "sk-alpha"\n'
+        'model    = "alpha-model"\n'
+    )
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", cfg)
+    _clear_env(monkeypatch)
+    assert ConfigFile.load().resolve().base_url == "https://api.deepseek.com/v1"
+

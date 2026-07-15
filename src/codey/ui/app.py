@@ -25,6 +25,7 @@ Layout (geek-clear, minimal):
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -165,12 +166,14 @@ class CodeyApp(App[None]):
         from ..session_store import SessionStore, SessionResumeError
 
         if self._resume_arg is None:
-            self._build_fresh_session(sinks)
+            if not self._build_fresh_session(sinks):
+                return
         elif self._resume_arg == "__PICK__":
             metas = SessionStore.list_for_workspace(str(Path.cwd().resolve()))
             # The picker needs a running app + worker context, so we always
             # start a fresh session first and swap it out if the user picks one.
-            self._build_fresh_session(sinks)
+            if not self._build_fresh_session(sinks):
+                return
             if not metas:
                 self._log_error("no sessions to resume in this workspace")
             else:
@@ -184,10 +187,12 @@ class CodeyApp(App[None]):
                 )
             except SessionResumeError as e:
                 self._log_error(f"resume failed: {e}")
-                self._build_fresh_session(sinks)
+                if not self._build_fresh_session(sinks):
+                    return
             except Exception as e:  # noqa: BLE001
                 self._log_error(f"resume failed: {type(e).__name__}: {e}")
-                self._build_fresh_session(sinks)
+                if not self._build_fresh_session(sinks):
+                    return
 
         self._refresh_title()
         self._log_meta("codey ready · type / for commands · ctrl+c to quit")
@@ -200,7 +205,9 @@ class CodeyApp(App[None]):
             self._defer_first_run()
         self.query_one(Input).focus()
 
-    def _build_fresh_session(self, sinks: UISinks) -> None:
+    def _build_fresh_session(self, sinks: UISinks) -> bool:
+        """Build a fresh session. Returns False if a config error forced a
+        clean exit — callers in on_mount must then stop (self.session is unset)."""
         try:
             self.session = Session.build(
                 provider_arg=self.provider_arg,
@@ -219,8 +226,16 @@ class CodeyApp(App[None]):
                     ui_sinks=sinks,
                     otel_enabled=False,
                 )
+            elif isinstance(e, RuntimeError):
+                # Config/provider errors (bad base_url, unknown provider, no
+                # providers). These are user-fixable — print the message and
+                # quit cleanly instead of dumping a Textual traceback.
+                print(f"codey: {e}", file=sys.stderr)
+                self.exit(return_code=1)
+                return False
             else:
                 raise
+        return True
 
     async def on_unmount(self) -> None:
         if hasattr(self, "session"):
