@@ -33,9 +33,9 @@ if (-not (Test-Path $configFile)) {
   Write-Host "-> writing default config to $configFile"
   New-Item -ItemType Directory -Force -Path $configDir | Out-Null
   @'
-default_profile = "deepseek"
+default_provider = "deepseek"
 
-[profiles.deepseek]
+[providers.deepseek]
 base_url = "https://api.deepseek.com/v1"
 api_key  = "sk-..."
 model    = "deepseek-chat"

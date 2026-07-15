@@ -33,9 +33,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
   echo "→ writing default config to $CONFIG_FILE"
   mkdir -p "$CONFIG_DIR"
   cat > "$CONFIG_FILE" <<'TOML'
-default_profile = "deepseek"
+default_provider = "deepseek"
 
-[profiles.deepseek]
+[providers.deepseek]
 base_url = "https://api.deepseek.com/v1"
 api_key  = "sk-..."
 model    = "deepseek-chat"
