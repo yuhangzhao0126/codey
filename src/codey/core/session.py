@@ -273,7 +273,13 @@ class Session:
             )
 
         cfg = ConfigFile.load()
-        provider = cfg.resolve(provider_arg or meta.provider)
+        try:
+            provider = cfg.resolve(provider_arg or meta.provider)
+        except RuntimeError as e:
+            raise SessionResumeError(
+                f"provider {(provider_arg or meta.provider)!r} for session "
+                f"{session_id!r} is not usable: {e}"
+            ) from e
 
         engine = PermissionEngine.load(workspace=ws_path)
         tools = build_default_registry()

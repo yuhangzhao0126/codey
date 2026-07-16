@@ -48,6 +48,7 @@ from .modals.mode_picker import ModePickerScreen
 from .modals.provider_picker import ProviderPickerScreen
 from .modals.remember import RememberScreen
 from .modals.resume_picker import ResumePickerScreen
+from .modals.scope_picker import ScopePickerScreen
 from .modals.subagent_panel import SubAgentPanelScreen
 from .renderers import UISinks
 from .slash_commands import SlashCommand, build_slash_commands, handle_slash
@@ -163,21 +164,17 @@ class CodeyApp(App[None]):
     async def on_mount(self) -> None:
         sinks = self._build_sinks()
 
-        from ..session_store import SessionStore, SessionResumeError
+        from ..session_store import SessionResumeError
 
         if self._resume_arg is None:
             if not self._build_fresh_session(sinks):
                 return
         elif self._resume_arg == "__PICK__":
-            metas = SessionStore.list_for_workspace(str(Path.cwd().resolve()))
             # The picker needs a running app + worker context, so we always
             # start a fresh session first and swap it out if the user picks one.
             if not self._build_fresh_session(sinks):
                 return
-            if not metas:
-                self._log_error("no sessions to resume in this workspace")
-            else:
-                self._defer_resume_picker(metas, sinks)
+            self._defer_scope_then_picker(sinks)
         else:
             sid = self._resume_arg
             try:
@@ -199,7 +196,10 @@ class CodeyApp(App[None]):
         self._log_meta(f"workspace: {self.workspace}")
         self._log_meta(f"permission mode: {self.engine.mode.value}"
                        + ("  ⚠" if self.engine.mode == Mode.YOLO else ""))
-        if self._resume_arg not in (None, "__PICK__"):
+        if self._resume_arg not in (None, "__PICK__") and hasattr(self, "session"):
+            # Explicit `codey --resume <SID>` at startup: repaint the restored
+            # conversation. (The picker/slash paths replay via _resume_by_id.)
+            self._replay_history()
             self._log_meta(f"[resumed session {self.session.session_id}]")
         if self._resume_arg is None and self.session.provider.needs_api_key:
             self._defer_first_run()
@@ -452,28 +452,120 @@ class CodeyApp(App[None]):
 
     # -- session resume --
 
-    def _defer_resume_picker(self, metas, sinks: UISinks) -> None:
-        """Open the resume picker in a worker and swap the live session if a
-        session is chosen. push_screen_wait requires a worker context."""
+    async def _resume_by_id(self, sid: str, sinks: UISinks) -> None:
+        """Resume a session id in place. Single typed-error chokepoint used by
+        both the picker and the direct `/resume <sid>` path. Never crashes."""
+        from ..session_store import SessionResumeError
+        try:
+            new_sess = Session.build_resumed(
+                session_id=sid, provider_arg=self.provider_arg,
+                ui_sinks=sinks, otel_enabled=self._otel_enabled,
+            )
+        except SessionResumeError as e:
+            self._log_error(f"resume failed: {e}")
+            return
+        except Exception as e:  # noqa: BLE001
+            self._log_error(f"resume failed: {type(e).__name__}: {e}")
+            return
+        old = getattr(self, "session", None)
+        self.session = new_sess
+        if old is not None:
+            await old.aclose()
+        self._refresh_title()
+        self._replay_history()
+        self._log_meta(f"[resumed session {sid}]")
+
+    def _replay_history(self) -> None:
+        """Repaint the restored conversation into the transcript so a resumed
+        session looks the same as before. Renders user/assistant text, tool
+        calls, and tool results in the same styles a live turn uses. The
+        system message is never shown. Best-effort: never raises."""
+        import json as _json
+
+        try:
+            self.transcript.clear()
+        except Exception:  # noqa: BLE001
+            pass
+        self._log_meta(f"[replaying {self.session.session_id} …]")
+        for msg in self.session.agent.history:
+            try:
+                if msg.role == "system":
+                    continue
+                if msg.role == "user":
+                    if msg.content.strip():
+                        self._log_user(msg.content)
+                elif msg.role == "assistant":
+                    if msg.content.strip():
+                        self._log_assistant(msg.content)
+                    for call in (msg.tool_calls or []):
+                        fn = call.get("function", {})
+                        name = fn.get("name", "?")
+                        raw = fn.get("arguments", "") or ""
+                        try:
+                            args = _json.loads(raw) if raw else {}
+                            rendered = ", ".join(f"{k}={v!r}" for k, v in args.items())
+                        except (ValueError, TypeError):
+                            rendered = raw
+                        self.transcript.write(f"[yellow]→ {name}({rendered})[/]")
+                elif msg.role == "tool":
+                    name = msg.name or "?"
+                    body = (msg.content or "").strip().replace("\n", " ")
+                    if len(body) > 200:
+                        body = body[:199] + "…"
+                    self.transcript.write(f"[dim]← {name}  {body}[/]")
+            except Exception:  # noqa: BLE001 — one bad message must not abort replay
+                continue
+
+    def _defer_scope_then_picker(self, sinks: UISinks) -> None:
+        """Open the scope chooser, then the session picker, then resume the
+        chosen session. push_screen_wait requires a worker context."""
+        from ..session_store import SessionStore
+
         async def _go() -> None:
-            picked = await self.push_screen_wait(ResumePickerScreen(metas))
+            cwd = str(Path.cwd().resolve())
+            try:
+                ws_metas = SessionStore.list_for_workspace(cwd)
+                all_metas = SessionStore.list_all()
+            except Exception as e:  # noqa: BLE001
+                self._log_error(f"could not list sessions: {type(e).__name__}: {e}")
+                return
+
+            scope = await self.push_screen_wait(
+                ScopePickerScreen(len(ws_metas), len(all_metas))
+            )
+            if scope is None:
+                return
+            if scope == "workspace":
+                metas, label = ws_metas, "this workspace"
+            else:
+                metas, label = all_metas, "all workspaces"
+
+            unavailable: dict[str, str] = {}
+            for m in metas:
+                reason = SessionStore.resumability(m)
+                if reason:
+                    unavailable[m.session_id] = reason
+
+            def _preview(sid: str) -> list[str]:
+                return SessionStore(sid).preview_prompts()
+
+            picked = await self.push_screen_wait(
+                ResumePickerScreen(
+                    metas, scope_label=label,
+                    preview_fn=_preview, unavailable=unavailable,
+                )
+            )
             if not picked:
                 return
-            try:
-                new_sess = Session.build_resumed(
-                    session_id=picked, provider_arg=self.provider_arg,
-                    ui_sinks=sinks, otel_enabled=self._otel_enabled,
-                )
-            except Exception as e:  # noqa: BLE001
-                self._log_error(f"resume failed: {type(e).__name__}: {e}")
-                return
-            old = getattr(self, "session", None)
-            self.session = new_sess
-            if old is not None:
-                await old.aclose()
-            self._refresh_title()
-            self._log_meta(f"[resumed session {picked}]")
+            await self._resume_by_id(picked, sinks)
+
         self.run_worker(_go(), exclusive=False, group="resume-picker")
+
+    def _defer_direct_resume(self, sid: str, sinks: UISinks) -> None:
+        """Resume a specific session id from `/resume <sid>` in a worker."""
+        async def _go() -> None:
+            await self._resume_by_id(sid, sinks)
+        self.run_worker(_go(), exclusive=False, group="resume-direct")
 
     def _defer_first_run(self) -> None:
         """First-run key prompt when the active provider has the placeholder key.
@@ -496,13 +588,13 @@ class CodeyApp(App[None]):
             self._log_meta(f"deepseek key saved to {CONFIG_PATH}")
         self.run_worker(_go(), exclusive=False, group="first-run")
 
-    async def _cmd_resume(self, _arg: str = "") -> None:
-        from ..session_store import SessionStore
-        metas = SessionStore.list_for_workspace(str(Path.cwd().resolve()))
-        if not metas:
-            self._log_meta("no sessions to resume in this workspace")
-            return
-        self._defer_resume_picker(metas, self._build_sinks())
+    async def _cmd_resume(self, arg: str = "") -> None:
+        sinks = self._build_sinks()
+        sid = arg.strip()
+        if sid:
+            self._defer_direct_resume(sid, sinks)
+        else:
+            self._defer_scope_then_picker(sinks)
 
     # -- long-term memory: /remember --
 

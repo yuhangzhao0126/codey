@@ -98,7 +98,8 @@ src/codey/
   session_store/    # Session persistence + /resume (Part 1 of memory)
     meta.py         #   SessionMeta — meta.json sidecar (forward-compatible)
     store.py        #   SessionStore: append_message, load_history,
-                    #   list_for_workspace; writes messages.jsonl live
+                    #   list_for_workspace / list_all / preview_prompts /
+                    #   resumability; writes messages.jsonl live
     errors.py       #   SessionResumeError
 
   memory/           # Long-term memory (Part 2): per-entry md + MEMORY.md index
@@ -139,7 +140,7 @@ src/codey/
     renderers.py    #   _log_* helpers + UISinks
     modals/         #   approval.py, remember.py, provider_picker.py,
                     #   mode_picker.py, subagent_panel.py, resume_picker.py,
-                    #   memory_remember.py
+                    #   scope_picker.py, memory_remember.py
 ```
 
 ### How a turn flows
@@ -312,10 +313,18 @@ via `Agent._append_history` (the single chokepoint — there are no raw
 records workspace/provider/title/counts. `Session.build_resumed(session_id=…)`
 loads the jsonl, drops on-disk `system` entries, re-prepends a freshly
 composed system message, and runs `history.repair` so a crash mid-round
-heals on replay. `/resume` (or `codey --resume [SID]`) lists sessions for
-the cwd via `SessionStore.list_for_workspace` and rebuilds through
-`build_resumed`. A resumed session keeps the same `session_id` — it's a
-continuation, not a fork.
+heals on replay. `/resume` opens a two-level picker: a scope chooser
+(this workspace via `SessionStore.list_for_workspace` vs all workspaces via
+`SessionStore.list_all`), then a session list whose detail pane lazily shows
+each session's workspace + first-2/last-1 user prompts
+(`SessionStore.preview_prompts`). Sessions that can't be resumed (workspace
+or provider gone, per `SessionStore.resumability`) are shown but marked
+`[unavailable]` and refuse selection. `/resume <SID>` (and
+`codey --resume [SID]`) resume a specific session directly. All paths funnel
+through `ui/app.py:_resume_by_id`, the single chokepoint that turns any
+`SessionResumeError`/`RuntimeError` into a logged message instead of a crash,
+then rebuilds through `build_resumed`. A resumed session keeps the same
+`session_id` — it's a continuation, not a fork.
 
 **Long-term memory (`memory/`).** One markdown file per entry across two
 tiers (`~/.config/codey/memory/` global, `<ws>/.codey/memory/` project),
@@ -339,7 +348,8 @@ Key wiring lives in `core/session.py:Session.build` /
 `agent._memory_select` when `side_query` is on, and pass
 `memory_extract_factory` only when `auto_extract` is on);
 `core/turn.py:Agent._compose_loaded_memories` builds the 6th layer each
-turn; `ui/app.py:_defer_remember` / `_defer_resume_picker` drive the modals.
+turn; `ui/app.py:_defer_remember` / `_defer_scope_then_picker` /
+`_resume_by_id` drive the modals.
 
 ### Event stream
 

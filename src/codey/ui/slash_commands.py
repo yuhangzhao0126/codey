@@ -46,8 +46,8 @@ def build_slash_commands() -> dict[str, SlashCommand]:
                      lambda app, _: app._cmd_skills()),
         SlashCommand("compact",    "summarize history into a single message; preserves system prompt",
                      lambda app, _: app._cmd_compact()),
-        SlashCommand("resume",     "resume a session from this workspace",
-                     lambda app, _: app._cmd_resume()),
+        SlashCommand("resume",     "resume a session: /resume [sid]",
+                     lambda app, arg: app._cmd_resume(arg)),
         SlashCommand("remember",   "save a memory entry: /remember <freeform text>",
                      lambda app, arg: app._cmd_remember(arg)),
     ]

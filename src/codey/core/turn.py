@@ -332,6 +332,20 @@ class Agent:
         finally:
             if loaded_msg is not None and loaded_msg in self.history:
                 self.history.remove(loaded_msg)
+            # Refresh the session meta once per turn (cheap read-modify-write)
+            # so the resume picker shows an accurate message count + last_at.
+            # Per-message updates would rewrite meta.json on the hot append path.
+            if self._session_store is not None:
+                try:
+                    from datetime import datetime as _dt
+                    self._session_store.touch_meta(
+                        last_at=_dt.now().isoformat(timespec="seconds"),
+                        message_count=len(self.history),
+                    )
+                except Exception as e:  # noqa: BLE001
+                    if self._meta:
+                        self._meta(f"[session_store: meta update failed: "
+                                   f"{type(e).__name__}: {e}]")
             # Stop fires unconditionally so cleanup hooks (audit log flushes,
             # token counters, summaries) always run.
             await self.hooks.trigger(

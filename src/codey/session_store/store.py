@@ -123,12 +123,60 @@ class SessionStore:
             raise SessionResumeError(f"session {self.session_id!r}: meta.json missing")
         return SessionMeta.load(self._meta_path)
 
+    def preview_prompts(
+        self, *, first: int = 2, last: int = 1, max_chars: int = 200,
+    ) -> list[str]:
+        """Return a cheap preview: the first `first` + last `last` user prompts.
+
+        Reads messages.jsonl line-by-line (not load_history, which parses the
+        whole file into Message objects) and collects `content` where
+        role == "user". Overlap is de-duplicated when the session has few user
+        messages. Each prompt is collapsed to one line and truncated to
+        `max_chars`. Missing file → []. Never raises.
+        """
+        if not self._messages_path.exists():
+            return []
+        users: list[str] = []
+        try:
+            with self._messages_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        # Truncated last line (crash mid-write) — skip.
+                        continue
+                    if data.get("role") == "user":
+                        content = (data.get("content") or "").strip()
+                        if content:
+                            users.append(content)
+        except OSError:
+            return []
+
+        if not users:
+            return []
+        # first N, plus the final one, without duplicating when they overlap.
+        head = users[:first]
+        picked = list(head)
+        if last > 0:
+            for tail in users[-last:]:
+                if tail not in picked:
+                    picked.append(tail)
+
+        def _clip(s: str) -> str:
+            s = " ".join(s.split())
+            return s if len(s) <= max_chars else s[: max_chars - 1] + "…"
+
+        return [_clip(s) for s in picked]
+
     # -- discovery --
 
     @classmethod
-    def list_for_workspace(
-        cls, workspace: str, *, root: Path | None = None, limit: int = 50,
-    ) -> list[SessionMeta]:
+    def _scan_metas(cls, root: Path | None = None) -> list[SessionMeta]:
+        """Parse every `<sid>/meta.json` under root, skipping unreadable ones.
+        Sorted by last_at descending. A single bad sidecar never breaks the scan."""
         r = root if root is not None else _default_root()
         if not r.is_dir():
             return []
@@ -138,10 +186,44 @@ class SessionStore:
             if not mp.is_file():
                 continue
             try:
-                m = SessionMeta.load(mp)
+                metas.append(SessionMeta.load(mp))
             except (OSError, KeyError, json.JSONDecodeError):
                 continue
-            if m.workspace == workspace:
-                metas.append(m)
         metas.sort(key=lambda m: m.last_at, reverse=True)
+        return metas
+
+    @classmethod
+    def list_for_workspace(
+        cls, workspace: str, *, root: Path | None = None, limit: int = 50,
+    ) -> list[SessionMeta]:
+        metas = [m for m in cls._scan_metas(root) if m.workspace == workspace]
         return metas[:limit]
+
+    @classmethod
+    def list_all(
+        cls, *, root: Path | None = None, limit: int = 200,
+    ) -> list[SessionMeta]:
+        """All sessions across every workspace, most-recent first."""
+        return cls._scan_metas(root)[:limit]
+
+    @classmethod
+    def resumability(cls, meta: SessionMeta) -> str | None:
+        """None if the session looks resumable, else a short reason string.
+
+        Checks the workspace still exists and the meta's provider is still
+        configured. Must never raise — a config-load failure is treated as
+        'unknown', which does not block (returns None)."""
+        try:
+            if not Path(meta.workspace).is_dir():
+                return "workspace gone"
+        except OSError:
+            return "workspace gone"
+        try:
+            from ..config import ConfigFile
+            cfg = ConfigFile.load()
+            if meta.provider not in cfg.providers:
+                return "provider gone"
+        except Exception:  # noqa: BLE001 — never block resume on a config read
+            return None
+        return None
+
