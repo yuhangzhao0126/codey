@@ -58,6 +58,10 @@ powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/yuh
 Then edit your config (`~/.config/codey/config.toml`, or `%USERPROFILE%\.config\codey\config.toml`
 on Windows) to add your API key and run `codey`.
 
+To update an existing install to the latest `main`, run `codey --update`
+(re-runs `uv tool install --force` under the hood; your config is untouched),
+or just re-run the one-liner above.
+
 ## Setup (from source)
 
 Requirements: **Python ≥ 3.11** and [**uv**](https://github.com/astral-sh/uv).
