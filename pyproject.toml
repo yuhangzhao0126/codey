@@ -18,6 +18,7 @@ observability = [
 
 [project.scripts]
 codey = "codey.app:main"
+codey-migrate-sessions = "codey.session_store.migrate:main"
 
 [build-system]
 requires = ["hatchling"]
